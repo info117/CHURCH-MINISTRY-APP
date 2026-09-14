@@ -1,0 +1,6 @@
+{
+  "name": "CHURCH MINISTRY APP",
+  "description": "Comprehensive church ministry management platform featuring Computer Vision visual analysis, AI Bible companion, A2A multi-agent collaboration with Judge Agent guardrails, offline-first sync, and customizable administration.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

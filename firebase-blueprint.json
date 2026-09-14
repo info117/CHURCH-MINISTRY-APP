@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "PrayerRequest": {
+      "title": "Prayer Request",
+      "description": "Church-wide corporate and personal prayer petitions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "requester": { "type": "string", "maxLength": 100 },
+        "date": { "type": "string", "maxLength": 50 },
+        "category": { "type": "string", "enum": ["Healing", "Salvation", "Church Growth", "Missions", "Personal", "Family"] },
+        "description": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["Active", "Answered", "Urgent"] },
+        "urgencyLevel": { "type": "string", "enum": ["Critical", "Urgent", "General"] },
+        "isPrivate": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "title", "category", "description", "status"]
+    },
+    "Announcement": {
+      "title": "Church Announcement",
+      "description": "Official church-wide announcement published by administration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "date": { "type": "string", "maxLength": 50 },
+        "category": { "type": "string", "enum": ["General", "Urgent", "Event", "Fellowship"] },
+        "content": { "type": "string", "maxLength": 3000 },
+        "priority": { "type": "string", "enum": ["Standard", "High", "Emergency"] },
+        "author": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "category", "content", "priority", "author"]
+    },
+    "ChurchMember": {
+      "title": "Church Member",
+      "description": "Registered congregation member profile with milestone tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "firstName": { "type": "string", "maxLength": 100 },
+        "lastName": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "fellowship": { "type": "string" },
+        "role": { "type": "string" },
+        "activeStatus": { "type": "boolean" },
+        "birthDate": { "type": "string" },
+        "weddingAnniversary": { "type": "string" }
+      },
+      "required": ["id", "firstName", "lastName", "email", "fellowship", "role"]
+    },
+    "Sermon": {
+      "title": "Sermon",
+      "description": "Pastoral sermon outline and transcript document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "preacher": { "type": "string", "maxLength": 100 },
+        "date": { "type": "string", "maxLength": 50 },
+        "scripture": { "type": "string", "maxLength": 100 },
+        "series": { "type": "string" }
+      },
+      "required": ["id", "title", "preacher", "scripture"]
+    },
+    "ChurchSubscription": {
+      "title": "Church Subscription",
+      "description": "Church ministry SaaS subscription tier, billing cycle and status",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tierId": { "type": "string", "enum": ["starter", "pro", "enterprise"] },
+        "planName": { "type": "string", "maxLength": 100 },
+        "billingCycle": { "type": "string", "enum": ["monthly", "yearly"] },
+        "priceTag": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "enum": ["active", "trialing", "past_due", "canceled"] },
+        "billingEmail": { "type": "string", "maxLength": 200 },
+        "currentPeriodEnd": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "tierId", "planName", "billingCycle", "priceTag", "status"]
+    }
+  },
+  "firestore": {
+    "/subscriptions/{subscriptionId}": {
+      "schema": { "$ref": "entities/ChurchSubscription" },
+      "description": "Church ministry active subscriptions and billing status"
+    },
+    "/prayers/{prayerId}": {
+      "schema": { "$ref": "entities/PrayerRequest" },
+      "description": "Church-wide prayer requests and status synchronization"
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "entities/Announcement" },
+      "description": "Official church announcements triggering browser push notifications"
+    },
+    "/members/{memberId}": {
+      "schema": { "$ref": "entities/ChurchMember" },
+      "description": "Congregation roster and pastoral directory"
+    },
+    "/sermons/{sermonId}": {
+      "schema": { "$ref": "entities/Sermon" },
+      "description": "Sermon archive and teaching outlines"
+    },
+    "/ministryData/{docId}": {
+      "schema": { "$ref": "entities/PrayerRequest" },
+      "description": "Church ministry state and encrypted snapshots"
+    },
+    "/ministry_backups/{backupId}": {
+      "schema": { "$ref": "entities/PrayerRequest" },
+      "description": "Full church ministry encrypted cloud backups"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection testing
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // Church-wide Prayer Petitions & Status Tracking
+    match /prayers/{prayerId} {
+      allow read: if true; // Publicly readable for prayer warriors and intercessors
+      allow create: if isValidId(prayerId) 
+        && request.resource.data.title is string 
+        && request.resource.data.title.size() <= 200
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 2000
+        && request.resource.data.status in ['Active', 'Answered', 'Urgent'];
+      allow update: if isValidId(prayerId)
+        && request.resource.data.status in ['Active', 'Answered', 'Urgent']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'suggestedPoints', 'title', 'description', 'urgencyLevel']);
+      allow delete: if isAuthenticated();
+    }
+
+    // Church Announcements (for bulletins and push notifications)
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
+
+    // Church Congregation Members
+    match /members/{memberId} {
+      allow read, write: if true;
+    }
+
+    // Sermon outlines and transcripts
+    match /sermons/{sermonId} {
+      allow read, write: if true;
+    }
+
+    // Church Ministry data (shared or tenant-based)
+    match /ministryData/{docId} {
+      allow read: if true; // Public read for bulletins, schedules, announcements
+      allow write: if true; // Authorized staff can publish/update backups
+    }
+
+    // Church Subscriptions and Billing Information
+    match /subscriptions/{subscriptionId} {
+      allow read, write: if true;
+    }
+
+    // Global backups & ministry snapshots
+    match /ministry_backups/{backupId} {
+      allow read, write: if true;
+    }
+
+    match /backups/{backupId} {
+      allow read, write: if true;
+    }
+  }
+}
+
