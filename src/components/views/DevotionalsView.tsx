@@ -19,15 +19,21 @@ import {
   Check,
   RefreshCw,
   AlertCircle,
-  Tag
+  Tag,
+  Mail,
+  ShieldAlert
 } from 'lucide-react';
-import { Devotional, PrayerRequest, BibleTranslation, UrgencyLevel } from '../../types';
+import { Devotional, PrayerRequest, BibleTranslation, UrgencyLevel, SimulatedPrayerEmailAlert } from '../../types';
 import { 
   savePrayerToFirestore, 
   updatePrayerStatusInFirestore, 
   updatePrayerUrgencyInFirestore,
-  subscribeToChurchPrayers 
+  subscribeToChurchPrayers,
+  getStoredPrayerEmailAlerts,
+  onSimulatedPrayerEmailAlert,
+  generateSimulatedPrayerEmailAlert
 } from '../../lib/firebase';
+import { PrayerEmailAlertModal } from '../PrayerEmailAlertModal';
 
 interface DevotionalsViewProps {
   devotionals: Devotional[];
@@ -104,6 +110,18 @@ export const DevotionalsView: React.FC<DevotionalsViewProps> = ({
   const [aiSuggestedPoints, setAiSuggestedPoints] = useState<string[]>([]);
   const [isSubmittingToFirestore, setIsSubmittingToFirestore] = useState(false);
   const [firestoreSyncNotice, setFirestoreSyncNotice] = useState<string | null>(null);
+
+  // Simulated Email Alerts State (monitored by Firebase Background Job)
+  const [emailAlerts, setEmailAlerts] = useState<SimulatedPrayerEmailAlert[]>(() => getStoredPrayerEmailAlerts());
+  const [selectedAlertForModal, setSelectedAlertForModal] = useState<SimulatedPrayerEmailAlert | null>(null);
+  const [isAlertModalOpen, setIsAlertModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsubscribeAlerts = onSimulatedPrayerEmailAlert((newAlert) => {
+      setEmailAlerts(prev => [newAlert, ...prev.filter(a => a.id !== newAlert.id)]);
+    });
+    return () => unsubscribeAlerts();
+  }, []);
 
   // Real-time Firestore synchronization listener
   useEffect(() => {
@@ -234,7 +252,10 @@ export const DevotionalsView: React.FC<DevotionalsViewProps> = ({
     const syncResult = await savePrayerToFirestore(req);
     setIsSubmittingToFirestore(false);
 
-    if (syncResult.success) {
+    if (syncResult.emailAlert) {
+      setFirestoreSyncNotice(`🚨 High-urgency petition detected! Firebase background job triggered simulated email alert to pastoral intercessors.`);
+      setEmailAlerts(prev => [syncResult.emailAlert!, ...prev.filter(a => a.id !== syncResult.emailAlert!.id)]);
+    } else if (syncResult.success) {
       setFirestoreSyncNotice(`Prayer synchronized to Firestore backend (Document: /prayers/${req.id})`);
     } else {
       setFirestoreSyncNotice(`Saved to local memory; cached for cloud sync.`);
@@ -314,7 +335,22 @@ export const DevotionalsView: React.FC<DevotionalsViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {emailAlerts.length > 0 && (
+            <button
+              id="view-email-alerts-history-btn"
+              onClick={() => {
+                setSelectedAlertForModal(emailAlerts[0]);
+                setIsAlertModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-200 text-xs font-bold border border-red-400/40 transition-colors shadow-xs"
+              title="View simulated email alert dispatches triggered by Firebase background job"
+            >
+              <Mail className="w-4 h-4 text-red-400 animate-pulse" />
+              <span>Email Alerts ({emailAlerts.length})</span>
+            </button>
+          )}
+
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 text-xs font-bold text-amber-300 border border-white/15">
             <CloudCheck className="w-4 h-4 text-emerald-400" />
             <span>Firestore Sync: Live</span>
@@ -835,6 +871,27 @@ export const DevotionalsView: React.FC<DevotionalsViewProps> = ({
                             <span className="text-[10px] text-slate-500 font-semibold px-2 py-0.5 rounded bg-white/70 dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50">
                               {pr.category}
                             </span>
+
+                            {/* Simulated Pastoral Email Alert Badge & Inspection */}
+                            {(itemUrgency === 'Critical' || itemUrgency === 'Urgent') && (
+                              <button
+                                id={`view-prayer-alert-${pr.id}`}
+                                onClick={() => {
+                                  const found = emailAlerts.find(a => a.prayerId === pr.id);
+                                  if (found) {
+                                    setSelectedAlertForModal(found);
+                                  } else {
+                                    setSelectedAlertForModal(generateSimulatedPrayerEmailAlert(pr));
+                                  }
+                                  setIsAlertModalOpen(true);
+                                }}
+                                className="text-[10px] font-bold px-2.5 py-0.5 rounded-md bg-red-500/15 hover:bg-red-500/25 text-red-700 dark:text-red-300 border border-red-400/40 flex items-center gap-1 transition-colors"
+                                title="View simulated pastoral email alert record"
+                              >
+                                <Mail className="w-3 h-3 text-red-600 dark:text-red-400" />
+                                <span>Email Alert Dispatched</span>
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -981,6 +1038,15 @@ export const DevotionalsView: React.FC<DevotionalsViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Simulated Email Alert Modal for High-Urgency Prayers */}
+      <PrayerEmailAlertModal
+        isOpen={isAlertModalOpen}
+        onClose={() => setIsAlertModalOpen(false)}
+        alert={selectedAlertForModal}
+        allAlerts={emailAlerts}
+        onSelectAlert={(a) => setSelectedAlertForModal(a)}
+      />
     </div>
   );
 };

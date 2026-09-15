@@ -115,6 +115,24 @@ export interface PrayerRequest {
   urgencyLevel?: UrgencyLevel;
 }
 
+export interface SimulatedPrayerEmailAlert {
+  id: string;
+  prayerId: string;
+  recipients: string[];
+  sender: string;
+  subject: string;
+  body: string;
+  htmlBody: string;
+  urgencyLevel: 'Critical' | 'Urgent';
+  category: string;
+  requester: string;
+  sentAt: string;
+  status: 'delivered' | 'simulated';
+  prayerTitle: string;
+  prayerDescription: string;
+  suggestedPoints?: string[];
+}
+
 export interface ChurchOperationEvent {
   id: string;
   name: string;
@@ -389,8 +407,12 @@ export interface UserAccount {
   photoURL: string | null;
   role: UserRole;
   isBiometricEnrolled?: boolean;
-  lastLoginMethod?: 'google' | 'biometric' | 'anonymous';
+  lastLoginMethod?: 'google' | 'biometric' | 'anonymous' | 'email-password';
   createdAt?: string;
+  trialStartDate?: string;
+  trialEndDate?: string;
+  isTrialActive?: boolean;
+  hasPaidSubscription?: boolean;
 }
 
 export interface ChurchLocationQuery {
@@ -432,7 +454,7 @@ export interface ThinkBibleMessage {
 
 export type BillingCycle = 'monthly' | 'yearly';
 export type SubscriptionTierId = 'pro';
-export type SubscriptionStatus = 'active' | 'trialing' | 'past_due' | 'canceled';
+export type SubscriptionStatus = 'active' | 'trialing' | 'trial_expired' | 'past_due' | 'canceled';
 
 export interface SubscriptionPlan {
   id: SubscriptionTierId;
@@ -497,6 +519,10 @@ export interface ChurchSubscriptionState {
   isTaxExempt: boolean;
   paymentMethod: BillingPaymentMethod;
   invoices: BillingInvoice[];
+  subscriberName?: string;
+  trialStartDate?: string;
+  trialEndDate?: string;
+  isTrial?: boolean;
 }
 
 

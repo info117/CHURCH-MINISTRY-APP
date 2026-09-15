@@ -39,6 +39,11 @@ service cloud.firestore {
       allow delete: if isAuthenticated();
     }
 
+    // High-urgency prayer simulated email alert records
+    match /prayer_alerts/{alertId} {
+      allow read, write: if true;
+    }
+
     // Church Announcements (for bulletins and push notifications)
     match /announcements/{announcementId} {
       allow read: if true;
@@ -63,6 +68,11 @@ service cloud.firestore {
 
     // Church Subscriptions and Billing Information
     match /subscriptions/{subscriptionId} {
+      allow read, write: if true;
+    }
+
+    // Subscriber accounts and trial profiles
+    match /subscribers/{subscriberId} {
       allow read, write: if true;
     }
 

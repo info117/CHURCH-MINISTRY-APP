@@ -17,7 +17,7 @@ import {
   Sparkles,
   CreditCard
 } from 'lucide-react';
-import { BibleTranslation, UserRole, SyncState, UserAccount } from '../types';
+import { BibleTranslation, UserRole, SyncState, UserAccount, ChurchSubscriptionState } from '../types';
 import { GlobalVoiceListener } from './GlobalVoiceListener';
 
 interface TopBarProps {
@@ -41,6 +41,7 @@ interface TopBarProps {
   onNavigateTo?: (toolId: string) => void;
   onOpenTour?: () => void;
   onOpenThinkBible?: () => void;
+  churchSubscription?: ChurchSubscriptionState;
 }
 
 const ALL_ROLES: UserRole[] = [
@@ -73,9 +74,16 @@ export const TopBar: React.FC<TopBarProps> = ({
   activeToolId = 'dashboard',
   onNavigateTo = (_toolId: string) => {},
   onOpenTour,
-  onOpenThinkBible
+  onOpenThinkBible,
+  churchSubscription
 }) => {
   const isDark = theme === 'dark';
+
+  const isSubscriptionActive = churchSubscription
+    ? churchSubscription.status === 'active' ||
+      (churchSubscription.status === 'trialing' &&
+        (!churchSubscription.trialEndDate || new Date(churchSubscription.trialEndDate).getTime() > Date.now()))
+    : false;
 
   return (
     <header
@@ -269,6 +277,29 @@ export const TopBar: React.FC<TopBarProps> = ({
             <ChevronDown className="w-3 h-3 text-purple-400 absolute right-1.5 pointer-events-none" />
           </div>
         </div>
+
+        {/* Subscription Active / Upgrade Required Status Badge */}
+        {churchSubscription && (
+          <button
+            id="topbar-subscription-badge-btn"
+            onClick={() => onNavigateTo('billing')}
+            title={`Ministry Plan: ${churchSubscription.planName} (${isSubscriptionActive ? 'Subscription Active' : 'Upgrade Required'}). Click to manage billing.`}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all shrink-0 cursor-pointer border ${
+              isSubscriptionActive
+                ? 'bg-emerald-500/10 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                : 'bg-amber-500/10 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/40 hover:bg-amber-500/20'
+            }`}
+          >
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                isSubscriptionActive ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
+              }`}
+            />
+            <span className="whitespace-nowrap">
+              {isSubscriptionActive ? 'Subscription Active' : 'Upgrade Required'}
+            </span>
+          </button>
+        )}
 
         {/* Firebase & Biometric Account Trigger */}
         <button

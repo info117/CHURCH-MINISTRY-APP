@@ -80,15 +80,42 @@
         "status": { "type": "string", "enum": ["active", "trialing", "past_due", "canceled"] },
         "billingEmail": { "type": "string", "maxLength": 200 },
         "currentPeriodEnd": { "type": "string", "maxLength": 50 },
+        "stripeCustomerId": { "type": "string", "maxLength": 100 },
+        "stripeSubscriptionId": { "type": "string", "maxLength": 100 },
+        "isTrial": { "type": "boolean" },
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "tierId", "planName", "billingCycle", "priceTag", "status"]
+    },
+    "PrayerEmailAlert": {
+      "title": "Prayer Email Alert",
+      "description": "Simulated email notification dispatched for high-urgency prayer requests",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "prayerId": { "type": "string", "maxLength": 128 },
+        "recipients": { "type": "array" },
+        "sender": { "type": "string", "maxLength": 200 },
+        "subject": { "type": "string", "maxLength": 300 },
+        "urgencyLevel": { "type": "string", "enum": ["Critical", "Urgent"] },
+        "status": { "type": "string", "enum": ["delivered", "simulated"] },
+        "sentAt": { "type": "string" }
+      },
+      "required": ["id", "prayerId", "subject", "urgencyLevel", "status", "sentAt"]
     }
   },
   "firestore": {
+    "/prayer_alerts/{alertId}": {
+      "schema": { "$ref": "entities/PrayerEmailAlert" },
+      "description": "Historical audit log of simulated email alert dispatches for high-urgency prayers"
+    },
     "/subscriptions/{subscriptionId}": {
       "schema": { "$ref": "entities/ChurchSubscription" },
       "description": "Church ministry active subscriptions and billing status"
+    },
+    "/subscribers/{subscriberId}": {
+      "schema": { "$ref": "entities/ChurchSubscription" },
+      "description": "Registered subscriber profiles and trial states"
     },
     "/prayers/{prayerId}": {
       "schema": { "$ref": "entities/PrayerRequest" },

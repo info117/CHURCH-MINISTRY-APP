@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   CreditCard,
   Check,
@@ -18,7 +18,14 @@ import {
   Lock,
   ChevronRight,
   ExternalLink,
-  Info
+  Info,
+  UserPlus,
+  LogIn,
+  LogOut,
+  KeyRound,
+  UserCheck,
+  User,
+  Zap
 } from 'lucide-react';
 import {
   ChurchSubscriptionState,
@@ -26,7 +33,8 @@ import {
   SubscriptionTierId,
   SubscriptionPlan,
   BillingInvoice,
-  ChurchProfile
+  ChurchProfile,
+  UserAccount
 } from '../../types';
 import { SUBSCRIPTION_PLANS } from '../../data/subscriptionPlans';
 import {
@@ -35,39 +43,130 @@ import {
   saveLocalSubscription,
   syncSubscriptionToFirestore
 } from '../../lib/subscriptionService';
+import {
+  signUpSubscriber,
+  signInSubscriber,
+  signOutSubscriber,
+  changeSubscriberPassword,
+  calculateTrialDaysRemaining,
+  isTrialExpired,
+  payForSubscription,
+  simulateExpiredTrialState,
+  getSavedSubscriber
+} from '../../lib/subscriberAuth';
+import {
+  getStripeConfig,
+  initiateStripeCheckout,
+  openStripeCustomerPortal,
+  StripeConfigResponse
+} from '../../lib/stripeClient';
+import { SubscriptionPlans } from '../SubscriptionPlans';
 
 interface SubscriptionsBillingViewProps {
   subscription: ChurchSubscriptionState;
   churchProfile: ChurchProfile;
   onUpdateSubscription: (newSub: ChurchSubscriptionState) => void;
   onNavigateToTool?: (toolId: string) => void;
+  currentUser?: UserAccount | null;
+  onUserChange?: (user: UserAccount | null) => void;
 }
 
 export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> = ({
   subscription,
   churchProfile,
   onUpdateSubscription,
-  onNavigateToTool
+  onNavigateToTool,
+  currentUser,
+  onUserChange
 }) => {
   // Billing cycle toggle state: 'monthly' or 'yearly'
   const [selectedCycle, setSelectedCycle] = useState<BillingCycle>(subscription.billingCycle);
   const [activeTab, setActiveTab] = useState<'plans' | 'payment' | 'invoices'>('plans');
 
-  // Modal states
-  const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
-  const [pendingPlan, setPendingPlan] = useState<SubscriptionPlan | null>(null);
-  const [pendingCycle, setPendingCycle] = useState<BillingCycle>(subscription.billingCycle);
+  // Subscriber User State (synced from prop or localStorage)
+  const [subscriber, setSubscriber] = useState<UserAccount | null>(() => {
+    return currentUser || getSavedSubscriber();
+  });
 
+  // Stripe State & Configuration
+  const [stripeConfig, setStripeConfig] = useState<StripeConfigResponse | null>(null);
+  const [isStripeLoading, setIsStripeLoading] = useState(false);
+
+  useEffect(() => {
+    if (currentUser) {
+      setSubscriber(currentUser);
+    }
+  }, [currentUser]);
+
+  // Load Stripe configuration and handle return redirects from Stripe Checkout
+  useEffect(() => {
+    getStripeConfig().then((cfg) => {
+      setStripeConfig(cfg);
+    });
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const checkoutStatus = params.get('checkout');
+      const cycleParam = params.get('cycle') as BillingCycle | null;
+
+      if (checkoutStatus === 'success') {
+        const chosenCycle: BillingCycle = cycleParam === 'yearly' ? 'yearly' : 'monthly';
+        payForSubscription(subscription, chosenCycle, '4242').then((updatedSub) => {
+          onUpdateSubscription(updatedSub);
+          showToast(
+            `Stripe Checkout verified! Sanctuary Pro ${chosenCycle === 'monthly' ? '$19.99/Monthly' : '$199.99/yearly'} is now active. Receipt generated.`,
+            'success'
+          );
+          window.history.replaceState({}, '', window.location.pathname);
+        });
+      } else if (checkoutStatus === 'cancel') {
+        showToast('Stripe checkout was not completed. You can resume at any time.', 'info');
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }
+  }, []);
+
+  // Auth Modals
+  const [isSignUpModalOpen, setIsSignUpModalOpen] = useState(false);
+  const [signUpName, setSignUpName] = useState('');
+  const [signUpEmail, setSignUpEmail] = useState('');
+  const [signUpPassword, setSignUpPassword] = useState('');
+  const [signUpConfirmPassword, setSignUpConfirmPassword] = useState('');
+  const [signUpLoading, setSignUpLoading] = useState(false);
+  const [signUpError, setSignUpError] = useState<string | null>(null);
+
+  const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
+  const [signInEmail, setSignInEmail] = useState('');
+  const [signInPassword, setSignInPassword] = useState('');
+  const [signInLoading, setSignInLoading] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
+
+  const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
+  const [changePasswordEmail, setChangePasswordEmail] = useState('');
+  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmNewPasswordInput, setConfirmNewPasswordInput] = useState('');
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+  const [changePasswordSuccess, setChangePasswordSuccess] = useState<string | null>(null);
+  const [changePasswordError, setChangePasswordError] = useState<string | null>(null);
+
+  // Direct / Post-Trial Payment Modal
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [cardholderName, setCardholderName] = useState(subscription.paymentMethod.cardholderName);
+  const [paymentCycle, setPaymentCycle] = useState<BillingCycle>(subscription.billingCycle);
+  const [cardholderName, setCardholderName] = useState(
+    subscription.paymentMethod.cardholderName || subscriber?.displayName || 'Rev. Dr. David Emmanuel'
+  );
   const [cardNumber, setCardNumber] = useState('•••• •••• •••• ' + subscription.paymentMethod.last4);
   const [cardExpiry, setCardExpiry] = useState(
     `${subscription.paymentMethod.expiryMonth}/${subscription.paymentMethod.expiryYear.slice(-2)}`
   );
   const [cardCvc, setCardCvc] = useState('•••');
-  const [billingEmail, setBillingEmail] = useState(subscription.billingEmail);
+  const [billingEmail, setBillingEmail] = useState(
+    subscription.billingEmail || subscriber?.email || 'pastor@church.org'
+  );
   const [isTaxExempt, setIsTaxExempt] = useState(subscription.isTaxExempt);
   const [taxExemptId, setTaxExemptId] = useState(subscription.churchTaxExemptId || 'EXEMPT-501C3-984321');
+  const [paymentLoading, setPaymentLoading] = useState(false);
 
   // Invoice viewer modal
   const [selectedInvoice, setSelectedInvoice] = useState<BillingInvoice | null>(null);
@@ -76,95 +175,218 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
 
   // Toast / notification feedback
-  const [feedbackToast, setFeedbackToast] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
+  const [feedbackToast, setFeedbackToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
-  const showToast = (message: string, type: 'success' | 'info' = 'success') => {
+  const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setFeedbackToast({ message, type });
-    setTimeout(() => setFeedbackToast(null), 4500);
+    setTimeout(() => setFeedbackToast(null), 5000);
   };
 
-  // Helper to trigger plan selection modal
-  const handleSelectPlan = (plan: SubscriptionPlan) => {
-    if (plan.id === subscription.tierId && selectedCycle === subscription.billingCycle) {
-      showToast(`You are already subscribed to ${plan.name} (${subscription.priceTag}).`, 'info');
+  // Trial state calculations
+  const isTrial = Boolean(subscription.isTrial || subscription.status === 'trialing' || subscription.status === 'trial_expired');
+  const trialDaysRemaining = calculateTrialDaysRemaining(subscription.trialEndDate);
+  const isExpired = subscription.status === 'trial_expired' || (isTrial && trialDaysRemaining <= 0);
+
+  // Handle Subscriber Sign Up
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSignUpError(null);
+
+    if (signUpPassword !== signUpConfirmPassword) {
+      setSignUpError('Passwords do not match. Please verify.');
       return;
     }
-    setPendingPlan(plan);
-    setPendingCycle(selectedCycle);
-    setIsPlanModalOpen(true);
-  };
-
-  // Confirm plan change / subscription
-  const handleConfirmPlanChange = async () => {
-    if (!pendingPlan) return;
-
-    const newPriceTag = calculatePriceTag(pendingPlan.id, pendingCycle);
-    const now = new Date();
-    const periodEnd = new Date(now);
-    if (pendingCycle === 'monthly') {
-      periodEnd.setMonth(periodEnd.getMonth() + 1);
-    } else {
-      periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+    if (signUpPassword.length < 6) {
+      setSignUpError('Password must be at least 6 characters.');
+      return;
     }
 
-    // Generate a new invoice record
-    const newInvoice = createInvoiceRecord(
-      pendingPlan.id,
-      pendingCycle,
-      subscription.paymentMethod.last4
-    );
+    setSignUpLoading(true);
+    try {
+      const result = await signUpSubscriber(signUpName, signUpEmail, signUpPassword);
+      setSubscriber(result.user);
+      if (onUserChange) onUserChange(result.user);
+      onUpdateSubscription(result.subscription);
+      setBillingEmail(result.user.email || signUpEmail);
+      setCardholderName(result.user.displayName || signUpName);
 
-    const updated: ChurchSubscriptionState = {
-      ...subscription,
-      tierId: pendingPlan.id,
-      planName: pendingPlan.name,
-      billingCycle: pendingCycle,
-      priceTag: newPriceTag,
-      currentPeriodStart: now.toISOString(),
-      currentPeriodEnd: periodEnd.toISOString(),
-      status: 'active',
-      cancelAtPeriodEnd: false,
-      invoices: [newInvoice, ...subscription.invoices]
-    };
-
-    onUpdateSubscription(updated);
-    saveLocalSubscription(updated);
-    await syncSubscriptionToFirestore(updated);
-
-    setIsPlanModalOpen(false);
-    setPendingPlan(null);
-    showToast(
-      `Plan successfully updated to ${pendingPlan.name} at ${newPriceTag}! Renewal date: ${periodEnd.toLocaleDateString()}`
-    );
+      setIsSignUpModalOpen(false);
+      setSignUpName('');
+      setSignUpEmail('');
+      setSignUpPassword('');
+      setSignUpConfirmPassword('');
+      showToast(`Welcome ${result.user.displayName}! Your 7-Day Free Sanctuary Pro Trial is now active.`, 'success');
+    } catch (err: any) {
+      setSignUpError(err.message || 'Failed to complete sign up. Please try again.');
+    } finally {
+      setSignUpLoading(false);
+    }
   };
 
-  // Update payment method
-  const handleSavePaymentMethod = async (e: React.FormEvent) => {
+  // Handle Subscriber Sign In
+  const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanLast4 = cardNumber.replace(/\D/g, '').slice(-4) || subscription.paymentMethod.last4 || '4242';
-    const [expM = '12', expY = '28'] = cardExpiry.split('/');
+    setSignInError(null);
+    setSignInLoading(true);
 
-    const updated: ChurchSubscriptionState = {
-      ...subscription,
-      billingEmail,
-      isTaxExempt,
-      churchTaxExemptId: taxExemptId,
-      paymentMethod: {
-        ...subscription.paymentMethod,
-        cardholderName,
-        last4: cleanLast4,
-        expiryMonth: expM.padStart(2, '0'),
-        expiryYear: expY.length === 2 ? `20${expY}` : expY,
-        isDefault: true
+    try {
+      const result = await signInSubscriber(signInEmail, signInPassword);
+      setSubscriber(result.user);
+      if (onUserChange) onUserChange(result.user);
+      onUpdateSubscription(result.subscription);
+      setBillingEmail(result.user.email || signInEmail);
+      if (result.user.displayName) setCardholderName(result.user.displayName);
+
+      setIsSignInModalOpen(false);
+      setSignInEmail('');
+      setSignInPassword('');
+      showToast(`Signed in successfully as ${result.user.displayName || result.user.email}.`, 'success');
+    } catch (err: any) {
+      setSignInError(err.message || 'Sign in failed. Please verify your email and password.');
+    } finally {
+      setSignInLoading(false);
+    }
+  };
+
+  // Handle Change Password
+  const handleChangePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setChangePasswordError(null);
+    setChangePasswordSuccess(null);
+
+    const emailToUse = changePasswordEmail.trim() || subscriber?.email || '';
+    if (!emailToUse) {
+      setChangePasswordError('Please enter your account email address.');
+      return;
+    }
+    if (newPasswordInput.length < 6) {
+      setChangePasswordError('New password must be at least 6 characters.');
+      return;
+    }
+    if (newPasswordInput !== confirmNewPasswordInput) {
+      setChangePasswordError('Passwords do not match.');
+      return;
+    }
+
+    setChangePasswordLoading(true);
+    try {
+      await changeSubscriberPassword(emailToUse, newPasswordInput, currentPasswordInput);
+      setChangePasswordSuccess('Password updated successfully! You can now use your new password.');
+      setCurrentPasswordInput('');
+      setNewPasswordInput('');
+      setConfirmNewPasswordInput('');
+      showToast('Subscriber password has been changed successfully.', 'success');
+      setTimeout(() => {
+        setIsChangePasswordModalOpen(false);
+        setChangePasswordSuccess(null);
+      }, 2000);
+    } catch (err: any) {
+      setChangePasswordError(err.message || 'Failed to change password. Please verify account details.');
+    } finally {
+      setChangePasswordLoading(false);
+    }
+  };
+
+  // Handle Subscriber Sign Out
+  const handleSignOut = async () => {
+    try {
+      await signOutSubscriber();
+      setSubscriber(null);
+      if (onUserChange) onUserChange(null);
+      showToast('You have been signed out from your ministry subscriber account.', 'info');
+    } catch (err: any) {
+      showToast('Error during sign out.', 'error');
+    }
+  };
+
+  // Open Payment Modal for either Monthly or Yearly
+  const handleOpenPaymentModal = (cycle: BillingCycle) => {
+    setPaymentCycle(cycle);
+    setIsPaymentModalOpen(true);
+  };
+
+  // Handle Pay and Activate Subscription (either Monthly or Yearly)
+  const handleExecutePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPaymentLoading(true);
+
+    try {
+      const cleanLast4 = cardNumber.replace(/\D/g, '').slice(-4) || '4242';
+      const updatedSub = await payForSubscription(
+        {
+          ...subscription,
+          billingEmail,
+          isTaxExempt,
+          churchTaxExemptId: taxExemptId,
+          paymentMethod: {
+            ...subscription.paymentMethod,
+            cardholderName,
+            last4: cleanLast4,
+            expiryMonth: cardExpiry.split('/')[0] || '12',
+            expiryYear: cardExpiry.split('/')[1] ? `20${cardExpiry.split('/')[1]}` : '2028'
+          }
+        },
+        paymentCycle,
+        cleanLast4
+      );
+
+      onUpdateSubscription(updatedSub);
+      setIsPaymentModalOpen(false);
+      showToast(
+        `Payment successful! Sanctuary Pro ${paymentCycle === 'monthly' ? '$19.99/Monthly' : '$199.99/yearly'} is now active. Receipt generated.`,
+        'success'
+      );
+    } catch (err: any) {
+      showToast(err.message || 'Payment processing error. Please retry.', 'error');
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
+  // Handle Stripe Hosted Checkout
+  const handleStripeCheckout = async () => {
+    setIsStripeLoading(true);
+    try {
+      const res = await initiateStripeCheckout({
+        billingCycle: paymentCycle,
+        planType: paymentCycle,
+        userId: subscriber?.uid || 'usr-church-leader',
+        customerEmail: billingEmail || subscriber?.email,
+        churchName: churchProfile.name,
+        taxExemptId: isTaxExempt ? taxExemptId : undefined
+      });
+
+      if (!res.success) {
+        showToast(res.error || 'Unable to initiate Stripe checkout. You can also complete payment directly below.', 'info');
       }
-    };
+    } catch (err: any) {
+      showToast(err.message || 'Stripe checkout error.', 'error');
+    } finally {
+      setIsStripeLoading(false);
+    }
+  };
 
-    onUpdateSubscription(updated);
-    saveLocalSubscription(updated);
-    await syncSubscriptionToFirestore(updated);
+  // Handle Stripe Customer Portal
+  const handleOpenCustomerPortal = async () => {
+    setIsStripeLoading(true);
+    try {
+      const customerId = 'cus_church_subscriber';
+      const res = await openStripeCustomerPortal(customerId);
+      if (!res.success) {
+        showToast(res.error || 'Stripe Customer Portal will open once your first Stripe subscription invoice is active.', 'info');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Customer portal unavailable', 'error');
+    } finally {
+      setIsStripeLoading(false);
+    }
+  };
 
-    setIsPaymentModalOpen(false);
-    showToast('Payment method & church billing credentials updated successfully.');
+  // Test simulation helper: Fast-forward to expired trial
+  const handleSimulateTrialExpired = () => {
+    const expiredSub = simulateExpiredTrialState(subscription);
+    onUpdateSubscription(expiredSub);
+    showToast('Simulation: 7-Day Free Trial marked as Expired. You can now test paying for Monthly or Yearly.', 'info');
   };
 
   // Toggle cancellation at period end
@@ -189,6 +411,8 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
     }
   };
 
+  const proPlan = SUBSCRIPTION_PLANS[0];
+
   return (
     <div id="subscriptions-billing-view" className="space-y-6">
       {/* Toast Feedback Notification */}
@@ -198,11 +422,15 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
           className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl text-sm font-medium border animate-in fade-in slide-in-from-bottom-3 duration-200 ${
             feedbackToast.type === 'success'
               ? 'bg-emerald-950/90 text-emerald-100 border-emerald-500/30'
+              : feedbackToast.type === 'error'
+              ? 'bg-rose-950/90 text-rose-100 border-rose-500/30'
               : 'bg-slate-900/95 text-slate-100 border-[#7D3AC1]/40'
           }`}
         >
           {feedbackToast.type === 'success' ? (
             <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+          ) : feedbackToast.type === 'error' ? (
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
           ) : (
             <Info className="w-5 h-5 text-[#D4AF37] shrink-0" />
           )}
@@ -213,7 +441,7 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
       {/* Top Banner & Overview */}
       <div className="rounded-2xl p-6 md:p-8 bg-gradient-to-r from-[#0B1F4D] via-[#2A145A] to-[#7D3AC1] text-white shadow-xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-[#D4AF37]/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
-        
+
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2 max-w-2xl">
             <div className="flex items-center gap-2">
@@ -239,21 +467,25 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
           <div className="bg-black/30 backdrop-blur-md rounded-2xl p-4 border border-white/10 shrink-0 flex flex-col gap-2 min-w-[240px]">
             <div className="flex items-center justify-between text-xs text-slate-300">
               <span>Current Status:</span>
-              <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold uppercase text-[11px]">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                {subscription.status}
+              <span className={`inline-flex items-center gap-1 font-semibold uppercase text-[11px] ${
+                isExpired ? 'text-rose-400' : isTrial ? 'text-amber-400' : 'text-emerald-400'
+              }`}>
+                <span className={`w-2 h-2 rounded-full animate-pulse ${
+                  isExpired ? 'bg-rose-400' : isTrial ? 'bg-amber-400' : 'bg-emerald-400'
+                }`} />
+                {isExpired ? 'Trial Expired' : isTrial ? '7-Day Free Trial' : subscription.status}
               </span>
             </div>
 
             <div className="text-lg font-bold font-serif-cinzel text-white flex items-center justify-between">
-              <span>{subscription.planName}</span>
+              <span>Sanctuary Pro</span>
               <span className="text-sm font-sans text-[#D4AF37] font-bold">
-                {subscription.priceTag}
+                {isExpired ? 'Action Required' : isTrial ? 'Free Trial' : subscription.priceTag}
               </span>
             </div>
 
             <div className="text-[11px] text-slate-400 flex items-center justify-between pt-1 border-t border-white/10">
-              <span>Next Renewal:</span>
+              <span>{isTrial ? 'Trial Ends:' : 'Next Renewal:'}</span>
               <span className="text-slate-200">
                 {new Date(subscription.currentPeriodEnd).toLocaleDateString('en-US', {
                   month: 'short',
@@ -265,6 +497,196 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
           </div>
         </div>
       </div>
+
+      {/* SUBSCRIBER ACCOUNT BAR: Sign Up, Sign In, Sign Out, and Change Password */}
+      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+        {subscriber ? (
+          /* Signed In State */
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#0B1F4D] to-[#7D3AC1] text-[#D4AF37] font-serif-cinzel font-bold text-lg flex items-center justify-center border border-[#D4AF37]/30 shadow-sm shrink-0">
+                {subscriber.displayName ? subscriber.displayName.charAt(0).toUpperCase() : 'P'}
+              </div>
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-serif-cinzel font-bold text-sm sm:text-base text-slate-900 dark:text-white">
+                    {subscriber.displayName || 'Authorized Ministry Leader'}
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#7D3AC1]/10 dark:bg-[#7D3AC1]/30 text-[#7D3AC1] dark:text-[#D4AF37] border border-[#7D3AC1]/20">
+                    Subscriber
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+                  {subscriber.email}
+                </p>
+              </div>
+            </div>
+
+            {/* Subscriber Action Buttons */}
+            <div className="flex items-center flex-wrap gap-2">
+              {/* Change Password Button */}
+              <button
+                id="subscriber-change-password-btn"
+                onClick={() => {
+                  setChangePasswordEmail(subscriber.email || '');
+                  setIsChangePasswordModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors border border-slate-200 dark:border-slate-700"
+              >
+                <KeyRound className="w-3.5 h-3.5 text-[#7D3AC1] dark:text-[#D4AF37]" />
+                <span>Change Password</span>
+              </button>
+
+              {/* Sign Out Button */}
+              <button
+                id="subscriber-sign-out-btn"
+                onClick={handleSignOut}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/50 transition-colors border border-rose-200 dark:border-rose-900/50"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Not Signed In State: Prominent Sign Up and Sign In buttons */
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#D4AF37]/20 text-[#D4AF37] border border-[#D4AF37]/30 uppercase tracking-wide">
+                  7-Day Complimentary Trial
+                </span>
+                <h3 className="font-serif-cinzel font-bold text-sm sm:text-base text-slate-900 dark:text-white">
+                  Subscriber Account & Access
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Sign up with your Name, Email, and Password to unlock a <strong>7-Day Free Trial</strong> of Sanctuary Pro. Already registered? Sign in below.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5 shrink-0">
+              {/* Sign In Button */}
+              <button
+                id="subscriber-sign-in-btn"
+                onClick={() => setIsSignInModalOpen(true)}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 transition-colors"
+              >
+                <LogIn className="w-4 h-4 text-[#7D3AC1] dark:text-[#D4AF37]" />
+                <span>Sign In</span>
+              </button>
+
+              {/* Sign Up Button */}
+              <button
+                id="subscriber-sign-up-btn"
+                onClick={() => setIsSignUpModalOpen(true)}
+                className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white hover:opacity-95 shadow-md transition-all active:scale-95 border border-[#D4AF37]/30"
+              >
+                <UserPlus className="w-4 h-4 text-[#D4AF37]" />
+                <span>Sign Up (7-Day Free Trial)</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 7-DAY FREE TRIAL & EXPIRATION STATUS BANNER */}
+      {isExpired ? (
+        /* Trial Expired Alert Banner */
+        <div
+          id="trial-expired-alert-banner"
+          className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 text-slate-900 dark:text-white flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm"
+        >
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 rounded-xl bg-amber-500 text-slate-950 shrink-0 mt-0.5">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-extrabold text-amber-600 dark:text-amber-400 uppercase tracking-wide">
+                  7-Day Free Trial Expired
+                </span>
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Ended on {new Date(subscription.trialEndDate || subscription.currentPeriodEnd).toLocaleDateString()}
+                </span>
+              </div>
+              <h4 className="font-serif-cinzel font-bold text-sm sm:text-base">
+                Easily Pay to Continue Your Sanctuary Pro Access
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-300">
+                Choose either <strong>Monthly ($19.99/Monthly)</strong> or <strong>Yearly ($199.99/yearly — Save ~17%)</strong> to immediately restore unrestricted AI sermon generation and cloud sync.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              id="trial-expired-pay-monthly-btn"
+              onClick={() => handleOpenPaymentModal('monthly')}
+              className="px-4 py-2.5 rounded-xl text-xs font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white border border-slate-300 dark:border-slate-700 hover:bg-slate-100 transition-colors shadow-xs"
+            >
+              Pay Monthly ($19.99)
+            </button>
+
+            <button
+              id="trial-expired-pay-yearly-btn"
+              onClick={() => handleOpenPaymentModal('yearly')}
+              className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white hover:opacity-95 shadow-md transition-all active:scale-95 border border-[#D4AF37]/40"
+            >
+              Pay Yearly ($199.99 — Save 17%)
+            </button>
+          </div>
+        </div>
+      ) : isTrial ? (
+        /* Trial Active Banner */
+        <div
+          id="trial-active-banner"
+          className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-[#7D3AC1]/10 to-emerald-500/10 border border-emerald-500/30 text-slate-900 dark:text-white flex flex-col md:flex-row md:items-center justify-between gap-4"
+        >
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 rounded-xl bg-emerald-500 text-white shrink-0 mt-0.5 shadow-sm">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 uppercase">
+                  Active Free Trial
+                </span>
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  {trialDaysRemaining} {trialDaysRemaining === 1 ? 'day' : 'days'} remaining
+                </span>
+              </div>
+              <h4 className="font-serif-cinzel font-bold text-sm">
+                Full Sanctuary Pro Capabilities Unlocked
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-300">
+                Your trial expires on <strong>{new Date(subscription.trialEndDate || subscription.currentPeriodEnd).toLocaleDateString()}</strong>. When it ends, you can easily pay for either Monthly or Yearly subscription.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Developer / Tester Helper: Simulate Expired Trial */}
+            <button
+              id="simulate-trial-expire-btn"
+              onClick={handleSimulateTrialExpired}
+              title="Test the post-trial expiration flow"
+              className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-amber-500 dark:hover:text-amber-400 underline px-2 py-1"
+            >
+              Simulate Trial Expiry
+            </button>
+
+            <button
+              id="trial-lock-in-btn"
+              onClick={() => handleOpenPaymentModal(selectedCycle)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-[#7D3AC1] text-white hover:bg-[#682e9f] transition-all shadow-xs"
+            >
+              <Zap className="w-3.5 h-3.5 text-[#D4AF37]" />
+              <span>Lock In {selectedCycle === 'monthly' ? '$19.99/mo' : '$199.99/yr'}</span>
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Navigation Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto">
@@ -308,9 +730,12 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
         </button>
       </div>
 
-      {/* TAB 1: PLANS & PRICING */}
+      {/* TAB 1: PLANS & PRICING (ONLY Sanctuary Pro: $19.99/mo and $199.99/yr) */}
       {activeTab === 'plans' && (
         <div className="space-y-6">
+          {/* Direct Stripe Subscription Plans Checkout Cards */}
+          <SubscriptionPlans userId={subscriber?.uid || currentUser?.id} />
+
           {/* Monthly / Yearly Billing Toggle */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
             <div>
@@ -318,7 +743,7 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
                 Choose Your Ministry Cadence
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Switch anytime. Annual subscriptions include 2 months complimentary ministry stewardship.
+                Switch anytime. Annual subscriptions include 2 months complimentary ministry stewardship (~17% discount).
               </p>
             </div>
 
@@ -353,151 +778,150 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
             </div>
           </div>
 
-          {/* Pricing Cards Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-            {SUBSCRIPTION_PLANS.map((plan) => {
-              const isCurrent =
-                plan.id === subscription.tierId && selectedCycle === subscription.billingCycle;
-              const isPopular = plan.isPopular;
+          {/* Pricing Card: Sanctuary Pro (Centered, Elegant Single Plan) */}
+          <div className="max-w-2xl mx-auto">
+            <div
+              id="plan-card-pro"
+              className="flex flex-col justify-between rounded-2xl p-6 sm:p-8 bg-white dark:bg-slate-900 border-2 border-[#7D3AC1] shadow-xl dark:shadow-[#7D3AC1]/10 relative overflow-hidden"
+            >
+              {/* Badge */}
+              <div className="absolute top-0 right-0 px-4 py-1.5 rounded-bl-2xl text-[11px] font-bold tracking-wide uppercase bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-[#D4AF37] border-b border-l border-[#D4AF37]/40 shadow-sm">
+                Official Sanctuary Plan
+              </div>
 
-              // Price tag based on selected cycle
-              const displayPrice =
-                selectedCycle === 'monthly' ? plan.monthlyDisplay : plan.yearlyDisplay;
-              const subtext =
-                plan.priceMonthly === 0
-                  ? 'Free forever'
-                  : selectedCycle === 'monthly'
-                  ? 'Billed monthly ($19.99/Monthly)'
-                  : 'Billed annually ($199.99/yearly · save $40/yr)';
-
-              return (
-                <div
-                  key={plan.id}
-                  id={`plan-card-${plan.id}`}
-                  className={`flex flex-col justify-between rounded-2xl p-6 transition-all relative ${
-                    isPopular
-                      ? 'bg-white dark:bg-slate-900 border-2 border-[#7D3AC1] shadow-xl dark:shadow-[#7D3AC1]/10'
-                      : 'bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
-                  }`}
-                >
-                  {/* Popular / Recommended Badge */}
-                  {plan.badge && (
-                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase shadow-md bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-[#D4AF37] border border-[#D4AF37]/40">
-                      {plan.badge}
-                    </div>
-                  )}
-
-                  <div className="space-y-4">
-                    {/* Header */}
-                    <div>
-                      <h4 className="font-serif-cinzel text-lg font-bold text-slate-900 dark:text-white">
-                        {plan.name}
-                      </h4>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 min-h-[36px]">
-                        {plan.tagline}
-                      </p>
-                    </div>
-
-                    {/* Price Tag Highlight */}
-                    <div className="pt-2 pb-3 border-y border-slate-100 dark:border-slate-800">
-                      <div className="flex items-baseline gap-1">
-                        <span className="font-serif-cinzel text-3xl font-extrabold text-slate-900 dark:text-white">
-                          {displayPrice}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                        {subtext}
-                      </p>
-                    </div>
-
-                    {/* Quota & Limits Snapshot */}
-                    <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-[11px]">
-                      <div>
-                        <span className="text-slate-400 block">Members:</span>
-                        <span className="font-semibold text-slate-700 dark:text-slate-200">
-                          {plan.limits.members}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 block">AI Studio:</span>
-                        <span className="font-semibold text-slate-700 dark:text-slate-200">
-                          {plan.limits.aiGenerations}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 block">Cloud Store:</span>
-                        <span className="font-semibold text-slate-700 dark:text-slate-200">
-                          {plan.limits.cloudStorage}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 block">Campuses:</span>
-                        <span className="font-semibold text-slate-700 dark:text-slate-200">
-                          {plan.limits.campuses}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Features List */}
-                    <div className="space-y-2 pt-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                        Included In This Plan:
-                      </span>
-                      <ul className="space-y-2">
-                        {plan.features.map((feat, idx) => (
-                          <li
-                            key={idx}
-                            className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300"
-                          >
-                            <Check className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                            <span>{feat}</span>
-                          </li>
-                        ))}
-
-                        {plan.omittedFeatures?.map((om, idx) => (
-                          <li
-                            key={`om-${idx}`}
-                            className="flex items-start gap-2 text-xs text-slate-400 line-through opacity-60"
-                          >
-                            <X className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                            <span>{om}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+              <div className="space-y-6">
+                {/* Header */}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-[#7D3AC1] dark:text-[#D4AF37] uppercase tracking-wider">
+                      Complete Ministry Suite
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                      7-Day Free Trial Included
+                    </span>
                   </div>
 
-                  {/* Action Button */}
-                  <div className="pt-6 mt-6 border-t border-slate-100 dark:border-slate-800">
-                    {isCurrent ? (
-                      <div className="flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold border border-emerald-500/30">
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Current Active Plan ({subscription.priceTag})</span>
-                      </div>
-                    ) : (
-                      <button
-                        id={`select-plan-${plan.id}-btn`}
-                        onClick={() => handleSelectPlan(plan)}
-                        className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 shadow-sm ${
-                          isPopular
-                            ? 'bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white hover:opacity-95 border border-[#D4AF37]/30'
-                            : 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100'
-                        }`}
-                      >
-                        <span>
-                          {plan.priceMonthly === 0
-                            ? 'Downgrade to Starter'
-                            : `Select ${plan.name} (${
-                                selectedCycle === 'monthly' ? '$19.99/Monthly' : '$199.99/yearly'
-                              })`}
-                        </span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                  <h4 className="font-serif-cinzel text-2xl font-bold text-slate-900 dark:text-white mt-1">
+                    {proPlan.name}
+                  </h4>
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+                    {proPlan.tagline}
+                  </p>
+                </div>
+
+                {/* Price Display */}
+                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-baseline justify-between gap-2">
+                  <div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-serif-cinzel text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white">
+                        {selectedCycle === 'monthly' ? '$19.99' : '$199.99'}
+                      </span>
+                      <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                        {selectedCycle === 'monthly' ? '/ Month' : '/ Year (Stewardship Plan)'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      {selectedCycle === 'monthly'
+                        ? 'Billed monthly ($19.99/Monthly) · Cancel or upgrade anytime'
+                        : 'Billed annually ($199.99/yearly) · Includes 2 months free'}
+                    </p>
+                  </div>
+
+                  <div className="text-left sm:text-right">
+                    <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>501(c)(3) 0% Sales Tax</span>
+                    </span>
                   </div>
                 </div>
-              );
-            })}
+
+                {/* Limits & Capacities */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 text-xs">
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase">Members:</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Unlimited</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase">AI Exegesis:</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Unrestricted</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase">Cloud Storage:</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">25 GB Firestore</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase">Campuses:</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">All Campuses</span>
+                  </div>
+                </div>
+
+                {/* Features List */}
+                <div className="space-y-2.5">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Included Capabilities:
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {proPlan.features.map((feat, idx) => (
+                      <div key={idx} className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300">
+                        <Check className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                        <span>{feat}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action Button */}
+                <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
+                  {!subscriber ? (
+                    <button
+                      id="plan-signup-cta-btn"
+                      onClick={() => setIsSignUpModalOpen(true)}
+                      className="w-full py-3 px-6 rounded-xl text-xs sm:text-sm font-bold bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white hover:opacity-95 shadow-md flex items-center justify-center gap-2 transition-all active:scale-95 border border-[#D4AF37]/40"
+                    >
+                      <UserPlus className="w-4 h-4 text-[#D4AF37]" />
+                      <span>Sign Up to Start 7-Day Free Trial</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  ) : isExpired ? (
+                    <button
+                      id="plan-expired-pay-cta-btn"
+                      onClick={() => handleOpenPaymentModal(selectedCycle)}
+                      className="w-full py-3 px-6 rounded-xl text-xs sm:text-sm font-bold bg-gradient-to-r from-amber-600 via-amber-700 to-amber-600 text-white hover:opacity-95 shadow-md flex items-center justify-center gap-2 transition-all active:scale-95"
+                    >
+                      <Zap className="w-4 h-4 text-amber-200" />
+                      <span>
+                        Activate Sanctuary Pro Now ({selectedCycle === 'monthly' ? '$19.99/Monthly' : '$199.99/yearly'})
+                      </span>
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  ) : isTrial ? (
+                    <div className="space-y-2">
+                      <button
+                        id="plan-trial-pay-cta-btn"
+                        onClick={() => handleOpenPaymentModal(selectedCycle)}
+                        className="w-full py-3 px-6 rounded-xl text-xs sm:text-sm font-bold bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white hover:opacity-95 shadow-md flex items-center justify-center gap-2 transition-all active:scale-95 border border-[#D4AF37]/40"
+                      >
+                        <Zap className="w-4 h-4 text-[#D4AF37]" />
+                        <span>
+                          Pay & Lock In {selectedCycle === 'monthly' ? '$19.99/Monthly' : '$199.99/yearly'}
+                        </span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                      <p className="text-center text-[11px] text-slate-400">
+                        Trial active ({trialDaysRemaining} days remaining). You can pay anytime to guarantee continuity.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs sm:text-sm font-bold border border-emerald-500/30">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>
+                        Active Paid Subscription ({subscription.priceTag})
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Ministry Trust & Non-Profit Guarantee */}
@@ -574,14 +998,26 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-2">
-              <button
-                id="update-payment-method-btn"
-                onClick={() => setIsPaymentModalOpen(true)}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#7D3AC1] text-white hover:bg-[#682e9f] transition-colors"
-              >
-                Update Payment Details
-              </button>
+            <div className="flex items-center justify-between pt-2 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  id="update-payment-method-btn"
+                  onClick={() => setIsPaymentModalOpen(true)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-[#7D3AC1] text-white hover:bg-[#682e9f] transition-colors"
+                >
+                  Update Payment Details
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleOpenCustomerPortal}
+                  disabled={isStripeLoading}
+                  className="px-3 py-2 rounded-xl text-xs font-bold border border-[#635BFF]/30 text-[#635BFF] dark:text-indigo-400 hover:bg-[#635BFF]/10 flex items-center gap-1.5 transition-colors"
+                >
+                  <span>Stripe Portal</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              </div>
 
               <span className="text-[11px] text-slate-400 flex items-center gap-1">
                 <Lock className="w-3 h-3 text-slate-400" />
@@ -743,238 +1179,130 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
         </div>
       )}
 
-      {/* MODAL 1: CHECKOUT & CONFIRM PLAN SELECTION */}
-      {isPlanModalOpen && pendingPlan && (
+      {/* MODAL 1: SUBSCRIBER SIGN UP (NAME, EMAIL, PASSWORD) */}
+      {isSignUpModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
           <div
-            id="plan-checkout-modal"
+            id="subscriber-signup-modal"
             className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
           >
             <div className="p-6 bg-gradient-to-r from-[#0B1F4D] via-[#2A145A] to-[#7D3AC1] text-white">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
-                  Confirm Plan Selection
+                  Subscriber Registration
                 </span>
                 <button
-                  onClick={() => setIsPlanModalOpen(false)}
+                  onClick={() => setIsSignUpModalOpen(false)}
                   className="p-1 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
               <h3 className="font-serif-cinzel text-xl font-bold mt-1">
-                {pendingPlan.name}
+                Start 7-Day Free Trial
               </h3>
               <p className="text-xs text-slate-200">
-                {calculatePriceTag(pendingPlan.id, pendingCycle)}
+                Unlock full access to Sanctuary Pro immediately. No credit card required.
               </p>
             </div>
 
-            <div className="p-6 space-y-4">
-              {/* Cadence selection in modal */}
-              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 space-y-2">
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
-                  Select Billing Frequency:
-                </span>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setPendingCycle('monthly')}
-                    className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all ${
-                      pendingCycle === 'monthly'
-                        ? 'bg-[#7D3AC1] text-white border-[#7D3AC1]'
-                        : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
-                    }`}
-                  >
-                    Monthly: $19.99/Monthly
-                  </button>
-
-                  <button
-                    onClick={() => setPendingCycle('yearly')}
-                    className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all ${
-                      pendingCycle === 'yearly'
-                        ? 'bg-[#7D3AC1] text-white border-[#7D3AC1]'
-                        : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
-                    }`}
-                  >
-                    Yearly: $199.99/yearly
-                  </button>
+            <form onSubmit={handleSignUpSubmit} className="p-6 space-y-4">
+              {signUpError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{signUpError}</span>
                 </div>
-              </div>
+              )}
 
-              {/* Order summary breakdown */}
-              <div className="space-y-2 text-xs border-y border-slate-100 dark:border-slate-800 py-3">
-                <div className="flex justify-between text-slate-600 dark:text-slate-400">
-                  <span>{pendingPlan.name} ({pendingCycle})</span>
-                  <span className="font-mono font-semibold text-slate-900 dark:text-white">
-                    {calculatePriceTag(pendingPlan.id, pendingCycle)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-slate-600 dark:text-slate-400">
-                  <span>501(c)(3) Tax Exemption</span>
-                  <span className="text-emerald-500 font-semibold">$0.00</span>
-                </div>
-                <div className="flex justify-between text-sm font-bold text-slate-900 dark:text-white pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <span>Total Due Today:</span>
-                  <span className="font-mono text-[#7D3AC1] dark:text-[#D4AF37]">
-                    {pendingCycle === 'monthly' ? '$19.99' : '$199.99'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Payment method summary */}
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-xs text-slate-600 dark:text-slate-300">
-                <CreditCard className="w-4 h-4 text-[#7D3AC1] dark:text-[#D4AF37] shrink-0" />
-                <span>
-                  Will be charged to <strong>{subscription.paymentMethod.brand} ending in {subscription.paymentMethod.last4}</strong>.
-                </span>
-              </div>
-
-              {/* Action buttons */}
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  onClick={() => setIsPlanModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  id="confirm-plan-change-btn"
-                  onClick={handleConfirmPlanChange}
-                  className="px-5 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white hover:opacity-95 shadow-sm active:scale-95"
-                >
-                  Confirm & Activate
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 2: UPDATE PAYMENT METHOD */}
-      {isPaymentModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div
-            id="update-payment-modal"
-            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
-          >
-            <div className="p-6 bg-gradient-to-r from-[#0B1F4D] via-[#2A145A] to-[#7D3AC1] text-white">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
-                  Church Payment Method
-                </span>
-                <button
-                  onClick={() => setIsPaymentModalOpen(false)}
-                  className="p-1 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <h3 className="font-serif-cinzel text-xl font-bold mt-1">
-                Update Billing Credentials
-              </h3>
-            </div>
-
-            <form onSubmit={handleSavePaymentMethod} className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Cardholder / Ministry Officer Name
+                  Full Name / Pastoral Title
                 </label>
                 <input
                   type="text"
                   required
-                  value={cardholderName}
-                  onChange={(e) => setCardholderName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                  placeholder="e.g. Pastor David Emmanuel"
+                  value={signUpName}
+                  onChange={(e) => setSignUpName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Card Number
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    required
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(e.target.value)}
-                    placeholder="4242 4242 4242 4242"
-                    className="w-full pl-9 pr-3 py-2 rounded-xl text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
-                  />
-                  <CreditCard className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Expiration (MM/YY)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={cardExpiry}
-                    onChange={(e) => setCardExpiry(e.target.value)}
-                    placeholder="12/28"
-                    className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    CVC Code
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={cardCvc}
-                    onChange={(e) => setCardCvc(e.target.value)}
-                    placeholder="123"
-                    className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Billing Email
+                  Ministry Email Address
                 </label>
                 <input
                   type="email"
                   required
-                  value={billingEmail}
-                  onChange={(e) => setBillingEmail(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                  placeholder="pastor@church.org"
+                  value={signUpEmail}
+                  onChange={(e) => setSignUpEmail(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  501(c)(3) Tax Exemption Number
+                  Create Password (minimum 6 characters)
                 </label>
                 <input
-                  type="text"
-                  value={taxExemptId}
-                  onChange={(e) => setTaxExemptId(e.target.value)}
-                  placeholder="EXEMPT-501C3-XXXXXX"
-                  className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="••••••••"
+                  value={signUpPassword}
+                  onChange={(e) => setSignUpPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Confirm Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="••••••••"
+                  value={signUpConfirmPassword}
+                  onChange={(e) => setSignUpConfirmPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                />
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
+                <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-semibold">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Includes 7 days complimentary trial of Sanctuary Pro</span>
+                </div>
+                <p>After your trial expires, you can easily pay for either Monthly ($19.99) or Yearly ($199.99) of your choice.</p>
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsPaymentModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  onClick={() => {
+                    setIsSignUpModalOpen(false);
+                    setIsSignInModalOpen(true);
+                  }}
+                  className="text-xs text-[#7D3AC1] dark:text-[#D4AF37] font-semibold hover:underline"
                 >
-                  Cancel
+                  Already registered? Sign In
                 </button>
+
                 <button
                   type="submit"
-                  id="save-payment-method-submit"
-                  className="px-5 py-2 rounded-xl text-xs font-bold bg-[#7D3AC1] text-white hover:bg-[#682e9f] shadow-sm active:scale-95"
+                  disabled={signUpLoading}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white hover:opacity-95 shadow-md flex items-center gap-1.5 disabled:opacity-50 active:scale-95"
                 >
-                  Save Credentials
+                  {signUpLoading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <UserPlus className="w-4 h-4 text-[#D4AF37]" />
+                  )}
+                  <span>{signUpLoading ? 'Creating Account...' : 'Sign Up & Start Trial'}</span>
                 </button>
               </div>
             </form>
@@ -982,21 +1310,491 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
         </div>
       )}
 
-      {/* MODAL 3: VIEW OFFICIAL CHURCH INVOICE RECEIPT */}
+      {/* MODAL 2: SUBSCRIBER SIGN IN (EMAIL, PASSWORD & CHANGE PASSWORD LINK) */}
+      {isSignInModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div
+            id="subscriber-signin-modal"
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+          >
+            <div className="p-6 bg-gradient-to-r from-[#0B1F4D] via-[#2A145A] to-[#7D3AC1] text-white">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
+                  Subscriber Portal
+                </span>
+                <button
+                  onClick={() => setIsSignInModalOpen(false)}
+                  className="p-1 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <h3 className="font-serif-cinzel text-xl font-bold mt-1">
+                Sign In to Your Account
+              </h3>
+              <p className="text-xs text-slate-200">
+                Manage your church subscription, invoices, and ministry settings.
+              </p>
+            </div>
+
+            <form onSubmit={handleSignInSubmit} className="p-6 space-y-4">
+              {signInError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{signInError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="pastor@church.org"
+                  value={signInEmail}
+                  onChange={(e) => setSignInEmail(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChangePasswordEmail(signInEmail);
+                      setIsSignInModalOpen(false);
+                      setIsChangePasswordModalOpen(true);
+                    }}
+                    className="text-[11px] text-[#7D3AC1] dark:text-[#D4AF37] hover:underline"
+                  >
+                    Change / Forgot Password?
+                  </button>
+                </div>
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={signInPassword}
+                  onChange={(e) => setSignInPassword(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSignInModalOpen(false);
+                    setIsSignUpModalOpen(true);
+                  }}
+                  className="text-xs text-[#7D3AC1] dark:text-[#D4AF37] font-semibold hover:underline"
+                >
+                  Need an account? Sign Up
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={signInLoading}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-[#0B1F4D] dark:bg-[#7D3AC1] text-white hover:opacity-95 shadow-md flex items-center gap-1.5 disabled:opacity-50 active:scale-95"
+                >
+                  {signInLoading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <LogIn className="w-4 h-4" />
+                  )}
+                  <span>{signInLoading ? 'Signing In...' : 'Sign In'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: CHANGE SUBSCRIBER PASSWORD */}
+      {isChangePasswordModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div
+            id="subscriber-change-password-modal"
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+          >
+            <div className="p-6 bg-gradient-to-r from-[#0B1F4D] via-[#2A145A] to-[#7D3AC1] text-white">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
+                  Account Security
+                </span>
+                <button
+                  onClick={() => setIsChangePasswordModalOpen(false)}
+                  className="p-1 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <h3 className="font-serif-cinzel text-xl font-bold mt-1">
+                Change Subscriber Password
+              </h3>
+              <p className="text-xs text-slate-200">
+                Update your account password anytime as you wish.
+              </p>
+            </div>
+
+            <form onSubmit={handleChangePasswordSubmit} className="p-6 space-y-4">
+              {changePasswordSuccess && (
+                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900/50 text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{changePasswordSuccess}</span>
+                </div>
+              )}
+
+              {changePasswordError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{changePasswordError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Account Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="pastor@church.org"
+                  value={changePasswordEmail}
+                  onChange={(e) => setChangePasswordEmail(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Current Password (Optional if reset)
+                </label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={currentPasswordInput}
+                  onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  New Password (min 6 characters)
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="••••••••"
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="••••••••"
+                  value={confirmNewPasswordInput}
+                  onChange={(e) => setConfirmNewPasswordInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsChangePasswordModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={changePasswordLoading}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-[#7D3AC1] text-white hover:bg-[#682e9f] shadow-md flex items-center gap-1.5 disabled:opacity-50 active:scale-95"
+                >
+                  {changePasswordLoading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <KeyRound className="w-4 h-4 text-[#D4AF37]" />
+                  )}
+                  <span>{changePasswordLoading ? 'Updating...' : 'Update Password'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: PAY & ACTIVATE SUBSCRIPTION (POST-TRIAL OR DIRECT PAYMENT) */}
+      {isPaymentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div
+            id="checkout-payment-modal"
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+          >
+            <div className="p-6 bg-gradient-to-r from-[#0B1F4D] via-[#2A145A] to-[#7D3AC1] text-white">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
+                  Sanctuary Pro Checkout
+                </span>
+                <button
+                  onClick={() => setIsPaymentModalOpen(false)}
+                  className="p-1 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <h3 className="font-serif-cinzel text-xl font-bold mt-1">
+                Activate Sanctuary Pro
+              </h3>
+              <p className="text-xs text-slate-200">
+                Select your payment cadence: Monthly ($19.99) or Yearly ($199.99).
+              </p>
+            </div>
+
+            <form onSubmit={handleExecutePayment} className="p-6 space-y-4">
+              {/* Cadence Selection Buttons */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Select Subscription Frequency:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentCycle('monthly')}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all text-left flex flex-col justify-between ${
+                      paymentCycle === 'monthly'
+                        ? 'bg-[#7D3AC1] text-white border-[#7D3AC1] shadow-xs'
+                        : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <span>Monthly</span>
+                    <span className="text-sm font-mono font-bold mt-0.5">$19.99/mo</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPaymentCycle('yearly')}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all text-left flex flex-col justify-between relative ${
+                      paymentCycle === 'yearly'
+                        ? 'bg-[#7D3AC1] text-white border-[#7D3AC1] shadow-xs'
+                        : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <span className="flex items-center justify-between">
+                      <span>Yearly</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#D4AF37] text-slate-950 font-extrabold uppercase">
+                        Save 17%
+                      </span>
+                    </span>
+                    <span className="text-sm font-mono font-bold mt-0.5">$199.99/yr</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Order Breakdown */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 space-y-1.5 text-xs">
+                <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                  <span>Sanctuary Pro ({paymentCycle === 'monthly' ? 'Monthly' : 'Annual'})</span>
+                  <span className="font-mono font-semibold text-slate-900 dark:text-white">
+                    {paymentCycle === 'monthly' ? '$19.99' : '$199.99'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                  <span>501(c)(3) Ministry Tax Exemption:</span>
+                  <span className="text-emerald-500 font-semibold">$0.00 (0% Tax)</span>
+                </div>
+                <div className="flex justify-between text-sm font-bold text-slate-900 dark:text-white pt-2 border-t border-slate-200 dark:border-slate-700">
+                  <span>Total Due Today:</span>
+                  <span className="font-mono text-[#7D3AC1] dark:text-[#D4AF37]">
+                    {paymentCycle === 'monthly' ? '$19.99' : '$199.99'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Stripe Checkout Option */}
+              <div className="p-3.5 rounded-xl border border-[#635BFF]/30 bg-gradient-to-r from-indigo-50/70 to-purple-50/70 dark:from-indigo-950/30 dark:to-purple-950/30 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-md bg-[#635BFF] text-white flex items-center justify-center font-black text-xs shadow-xs">
+                      S
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white block leading-tight">
+                        Stripe Hosted Checkout
+                      </span>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                        Apple Pay, Google Pay, Credit Card & instant 501(c)(3) invoice
+                      </span>
+                    </div>
+                  </div>
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#635BFF]/10 text-[#635BFF] dark:text-indigo-300 border border-[#635BFF]/20 shrink-0">
+                    Fast & Secure
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleStripeCheckout}
+                  disabled={isStripeLoading}
+                  className="w-full py-2 px-3.5 rounded-xl bg-[#635BFF] hover:bg-[#5248e3] text-white text-xs font-bold shadow-md flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                >
+                  {isStripeLoading ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  )}
+                  <span>
+                    {isStripeLoading
+                      ? 'Redirecting to Stripe...'
+                      : `Pay with Stripe (${paymentCycle === 'monthly' ? '$19.99/mo' : '$199.99/yr'})`}
+                  </span>
+                  <ExternalLink className="w-3 h-3 ml-0.5 opacity-80" />
+                </button>
+              </div>
+
+              <div className="relative flex py-1 items-center">
+                <div className="grow border-t border-slate-200 dark:border-slate-800"></div>
+                <span className="shrink mx-2.5 text-[10px] uppercase font-bold text-slate-400">
+                  Or Direct Card Payment
+                </span>
+                <div className="grow border-t border-slate-200 dark:border-slate-800"></div>
+              </div>
+
+              {/* Payment Fields */}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Cardholder Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={cardholderName}
+                    onChange={(e) => setCardholderName(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Card Number
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={cardNumber}
+                    onChange={(e) => setCardNumber(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Expiry (MM/YY)
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="12/28"
+                      value={cardExpiry}
+                      onChange={(e) => setCardExpiry(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      CVC
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      maxLength={4}
+                      value={cardCvc}
+                      onChange={(e) => setCardCvc(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Church Tax Exemption ID
+                  </label>
+                  <input
+                    type="text"
+                    value={taxExemptId}
+                    onChange={(e) => setTaxExemptId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-[#7D3AC1]"
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsPaymentModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={paymentLoading}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white hover:opacity-95 shadow-md flex items-center gap-1.5 disabled:opacity-50 active:scale-95 border border-[#D4AF37]/30"
+                >
+                  {paymentLoading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CreditCard className="w-4 h-4 text-[#D4AF37]" />
+                  )}
+                  <span>
+                    {paymentLoading
+                      ? 'Processing...'
+                      : `Pay & Activate (${paymentCycle === 'monthly' ? '$19.99' : '$199.99'})`}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 5: OFFICIAL RECEIPT VIEWER */}
       {selectedInvoice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
           <div
             id="invoice-receipt-modal"
-            className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col"
+            className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200"
           >
             {/* Header */}
-            <div className="p-6 bg-slate-950 text-white flex items-start justify-between border-b border-slate-800">
+            <div className="p-6 bg-gradient-to-r from-[#0B1F4D] via-[#2A145A] to-[#7D3AC1] text-white flex items-center justify-between">
               <div>
-                <span className="font-serif-cinzel text-xs text-[#D4AF37] font-bold tracking-wider uppercase block">
+                <span className="text-xs font-bold uppercase tracking-wider text-[#D4AF37]">
                   Official Ecclesiastical Receipt
                 </span>
-                <h3 className="font-serif-cinzel text-lg font-bold text-white mt-0.5">
-                  {selectedInvoice.invoiceNumber}
+                <h3 className="font-serif-cinzel text-xl font-bold mt-1">
+                  Invoice {selectedInvoice.invoiceNumber}
                 </h3>
                 <span className="text-xs text-slate-400">Date: {selectedInvoice.date}</span>
               </div>
@@ -1098,7 +1896,7 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
         </div>
       )}
 
-      {/* MODAL 4: CANCEL CONFIRMATION */}
+      {/* MODAL 6: CANCEL CONFIRMATION */}
       {isCancelModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
           <div

@@ -11,25 +11,35 @@ import {
   Clock,
   Trash2,
   Edit,
-  Sparkles
+  Sparkles,
+  Download,
+  Printer,
+  FileText
 } from 'lucide-react';
-import { ChurchOperationEvent } from '../../types';
+import { ChurchOperationEvent, ChurchProfile } from '../../types';
+import { downloadChurchOperationsReport } from '../../lib/pdfReportGenerator';
 
 interface OperationsViewProps {
   operations: ChurchOperationEvent[];
   onAddOperation: (op: ChurchOperationEvent) => void;
   onUpdateOperation: (op: ChurchOperationEvent) => void;
   onDeleteOperation: (id: string) => void;
+  churchProfile?: ChurchProfile;
+  onOpenPrint?: () => void;
 }
 
 export const OperationsView: React.FC<OperationsViewProps> = ({
   operations = [],
   onAddOperation,
   onUpdateOperation,
-  onDeleteOperation
+  onDeleteOperation,
+  churchProfile,
+  onOpenPrint
 }) => {
   const [filterType, setFilterType] = useState<string>('All');
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false);
+  const [pdfSuccessMessage, setPdfSuccessMessage] = useState<string | null>(null);
 
   // New operation form state
   const [name, setName] = useState('');
@@ -72,6 +82,42 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
     setNotes('');
   };
 
+  const handleDownloadPdfReport = () => {
+    setDownloadingPdf(true);
+    try {
+      downloadChurchOperationsReport({
+        churchProfile: churchProfile || {
+          churchName: 'Church Ministry Sanctuary',
+          tagline: 'Rooted in the Word, Empowered by the Spirit',
+          address: '777 Sanctuary Way, Cathedral District',
+          city: 'Grace City',
+          state: 'TX',
+          country: 'USA',
+          email: 'pastoral@church.org',
+          phone: '(555) 019-2831',
+          logoUrl: '',
+          website: 'https://churchministry.org',
+          headPastor: 'Senior Pastor',
+          serviceTimes: {
+            sundayMain: '10:00 AM',
+            sundayEvening: '6:00 PM',
+            midweekPrayer: '7:00 PM',
+            bibleStudy: '7:30 PM'
+          }
+        },
+        operations,
+        reportingPeriod: 'Fiscal Ministry Quarter',
+        generatedBy: 'Operations & Evangelism Board'
+      });
+      setPdfSuccessMessage(`Operations & Attendance PDF report successfully generated and downloaded (${operations.length} operations included).`);
+      setTimeout(() => setPdfSuccessMessage(null), 5000);
+    } catch (err) {
+      console.error('Failed to generate PDF:', err);
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+
   const filteredOps = filterType === 'All'
     ? operations
     : operations.filter(o => o.type === filterType || o.status === filterType);
@@ -93,14 +139,55 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="px-4 py-2 rounded-xl bg-[#D4AF37] hover:bg-amber-400 text-[#0B1F4D] text-xs font-bold flex items-center gap-2 shadow-md transition-colors shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Launch New Operation</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {/* Download Report Button (PDF Generation) */}
+          <button
+            id="download-operations-report-pdf-btn"
+            onClick={handleDownloadPdfReport}
+            disabled={downloadingPdf}
+            title="Download comprehensive PDF summary of church operations and weekly attendance"
+            className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+          >
+            <Download className="w-4 h-4 text-[#D4AF37]" />
+            <span>{downloadingPdf ? 'Generating PDF...' : 'Download Report (PDF)'}</span>
+          </button>
+
+          {/* PDF / Print Action Button */}
+          <button
+            id="operations-print-pdf-btn"
+            onClick={onOpenPrint ? onOpenPrint : () => window.print()}
+            title="Open PDF Preview & Print Document"
+            className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+          >
+            <Printer className="w-4 h-4 text-[#D4AF37]" />
+            <span>PDF / Print</span>
+          </button>
+
+          {/* Launch New Operation Button */}
+          <button
+            onClick={() => setShowAddModal(true)}
+            id="launch-new-operation-btn"
+            className="px-4 py-2 rounded-xl bg-[#D4AF37] hover:bg-amber-400 text-[#0B1F4D] text-xs font-bold flex items-center gap-2 shadow-md transition-colors shrink-0 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Launch New Operation</span>
+          </button>
+        </div>
       </div>
+
+      {/* PDF Export Notification Feedback */}
+      {pdfSuccessMessage && (
+        <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between animate-fadeIn">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>{pdfSuccessMessage}</span>
+          </div>
+          <span className="text-[11px] opacity-80 flex items-center gap-1">
+            <FileText className="w-3.5 h-3.5 text-emerald-500" />
+            <span>A4 Document Downloaded</span>
+          </span>
+        </div>
+      )}
 
       {/* Filter Chips */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">

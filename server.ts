@@ -1,21 +1,83 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { callGeminiWithResilience, generateTheologicalCompanionResponse } from './server/geminiResilience';
 import { handleThinkBibleQuery } from './server/thinkbibleService';
+import {
+  createCheckoutSession,
+  createPortalSession,
+  isStripeConfigured,
+  constructWebhookEvent,
+  getStripe
+} from './server/stripeService';
+import {
+  updateUserSubscriptionStatus,
+  revokeUserSubscriptionStatus,
+  getUserFromDatabase
+} from './server/subscriptionDb';
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
 
-// High limit to allow image uploads for Computer Vision analysis
-app.use(express.json({ limit: '25mb' }));
+// Webhook endpoint (Requires express.raw body parser before global express.json)
+app.post(
+  ['/api/stripe-webhook', '/api/stripe/webhook'],
+  express.raw({ type: 'application/json' }),
+  async (req: Request, res: Response) => {
+    const sig = req.headers['stripe-signature'] as string;
+    let event: any;
+
+    try {
+      const stripe = getStripe();
+      const webhookSecret = process.env.STRIPE_WEBHOOK_KEY || '';
+
+      // Verify event came from Stripe
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        webhookSecret
+      );
+    } catch (err: any) {
+      console.error(`Webhook signature verification failed:`, err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Handle successful checkout session
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as any;
+      const userId = session.client_reference_id;
+      const customerId = session.customer;
+      const subscriptionId = session.subscription;
+
+      // Grant subscriber access in your database (e.g., Firebase, PostgreSQL)
+      await updateUserSubscriptionStatus(userId, {
+        status: 'active',
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscriptionId,
+        updatedAt: new Date(),
+      });
+    }
+
+    // Optional: Listen for subscription cancellation or failure
+    if (event.type === 'customer.subscription.deleted') {
+      const subscription = event.data.object as any;
+      await revokeUserSubscriptionStatus(subscription.id);
+    }
+
+    res.status(200).json({ received: true });
+  }
+);
+
+// High limit to allow image uploads for Computer Vision analysis + rawBody for Stripe Webhooks
+app.use(express.json({
+  limit: '25mb',
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Lazy GoogleGenAI client
@@ -500,6 +562,142 @@ app.post('/api/sync', (req: Request, res: Response) => {
     serverTimestamp: new Date().toISOString(),
     status: 'All changes committed with zero conflicts'
   });
+});
+
+// ==========================================
+// 7. STRIPE SUBSCRIPTION & BILLING ENDPOINTS
+// ==========================================
+app.get('/api/stripe/config', (_req: Request, res: Response) => {
+  const configured = isStripeConfigured();
+  const publishableKey = process.env.VITE_STRIPE_PUBLISHABLE_KEY || '';
+  
+  res.json({
+    configured,
+    publishableKey: publishableKey,
+    hasPublishableKey: Boolean(publishableKey && publishableKey.trim() !== ''),
+    hasMonthlyPriceId: Boolean(process.env.STRIPE_PRICE_ID_MONTHLY),
+    hasYearlyPriceId: Boolean(process.env.STRIPE_PRICE_ID_YEARLY),
+    monthlyPrice: 19.99,
+    yearlyPrice: 199.99,
+    currency: 'USD'
+  });
+});
+
+// Handler for creating checkout session supporting both /api/create-checkout-session and /api/stripe/create-checkout-session
+const handleCheckoutSessionCreation = async (req: Request, res: Response) => {
+  try {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({
+        error: 'Stripe is not yet configured. Please set the STRIPE_SECRET_KEY environment variable in Settings.'
+      });
+    }
+
+    const {
+      planType,
+      billingCycle,
+      userId,
+      customerEmail,
+      churchName,
+      taxExemptId
+    } = req.body;
+
+    const cycle: 'monthly' | 'yearly' = (planType === 'yearly' || billingCycle === 'yearly') ? 'yearly' : 'monthly';
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.get('host');
+    const baseAppUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : `${protocol}://${host}`;
+
+    const successUrl = `${baseAppUrl}/dashboard?session_id={CHECKOUT_SESSION_ID}&checkout=success&cycle=${cycle}`;
+    const cancelUrl = `${baseAppUrl}/pricing?checkout=cancel`;
+
+    const session = await createCheckoutSession({
+      billingCycle: cycle,
+      userId: userId || undefined,
+      customerEmail: customerEmail || undefined,
+      churchName: churchName || undefined,
+      taxExemptId: taxExemptId || undefined,
+      successUrl,
+      cancelUrl
+    });
+
+    // Return format compliant with both { url } and { success, url, sessionId }
+    res.json({
+      success: true,
+      url: session.url,
+      sessionId: session.sessionId
+    });
+  } catch (error: any) {
+    console.error('Error creating checkout session:', error);
+    res.status(500).json({ error: error.message || 'Failed to create checkout session' });
+  }
+};
+
+// Endpoint requested by user
+app.post('/api/create-checkout-session', handleCheckoutSessionCreation);
+app.post('/api/stripe/create-checkout-session', handleCheckoutSessionCreation);
+
+app.post('/api/stripe/create-portal-session', async (req: Request, res: Response) => {
+  try {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({
+        error: 'Stripe is not yet configured.'
+      });
+    }
+
+    const { customerId } = req.body;
+    if (!customerId) {
+      return res.status(400).json({ error: 'customerId is required' });
+    }
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.get('host');
+    const appUrl = process.env.APP_URL || `${protocol}://${host}`;
+
+    const portal = await createPortalSession(customerId, appUrl);
+    res.json({ success: true, url: portal.url });
+  } catch (error: any) {
+    console.error('Stripe billing portal error:', error);
+    res.status(500).json({ error: error.message || 'Failed to create customer portal session' });
+  }
+});
+
+// ==========================================
+// 8. GENERATE MINISTRY CONTENT (SUBSCRIBER GATED)
+// ==========================================
+app.post('/api/generate-ministry-content', async (req: Request, res: Response) => {
+  const { userId, prompt } = req.body;
+
+  if (!prompt || typeof prompt !== 'string') {
+    return res.status(400).json({ error: 'Prompt is required.' });
+  }
+
+  // 1. Verify User Subscription Status
+  const user = await getUserFromDatabase(userId);
+  if (!user || user.subscriptionStatus !== 'active') {
+    return res.status(403).json({
+      error: 'Active subscription required to access AI Ministry tools.'
+    });
+  }
+
+  // 2. Call Google AI Studio / Gemini API if verified
+  try {
+    const ai = getAi();
+    if (!ai) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY environment variable is not configured.' });
+    }
+
+    const result = await callGeminiWithResilience(ai, {
+      primaryModel: 'gemini-3.8-flash',
+      fallbackModels: ['gemini-flash-latest', 'gemini-3.1-flash-lite'],
+      contents: prompt
+    });
+
+    const responseText = result.text || '';
+    res.json({ content: responseText });
+  } catch (err: any) {
+    console.error('AI Content Generation Failed:', err);
+    res.status(500).json({ error: 'AI Content Generation Failed.' });
+  }
 });
 
 // ==========================================

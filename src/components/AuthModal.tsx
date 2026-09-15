@@ -11,11 +11,20 @@ import {
   Lock,
   Smartphone,
   KeyRound,
-  X
+  X,
+  UserPlus,
+  RefreshCw,
+  Mail
 } from 'lucide-react';
 import { UserAccount, UserRole } from '../types';
 import { getFirebaseAuth, googleProvider } from '../lib/firebase';
 import { signInWithPopup, signOut } from 'firebase/auth';
+import {
+  signUpSubscriber,
+  signInSubscriber,
+  changeSubscriberPassword,
+  signOutSubscriber
+} from '../lib/subscriberAuth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -32,13 +41,101 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onUserChange,
   onRoleChange
 }) => {
+  const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'changepassword'>('signin');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [biometricScanning, setBiometricScanning] = useState(false);
   const [biometricSuccess, setBiometricSuccess] = useState(false);
-  const [selectedRole, setSelectedRole] = useState<UserRole>('Super Administrator');
+  const [selectedRole, setSelectedRole] = useState<UserRole>('Pastor/Minister');
+
+  // Form states
+  const [nameInput, setNameInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
 
   if (!isOpen) return null;
+
+  // Email / Password Sign In
+  const handleEmailSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsProcessing(true);
+    setAuthError(null);
+
+    try {
+      const result = await signInSubscriber(emailInput, passwordInput);
+      onUserChange(result.user);
+      onRoleChange(result.user.role);
+      onClose();
+    } catch (err: any) {
+      setAuthError(err.message || 'Failed to sign in. Please verify your email and password.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Email / Password Sign Up
+  const handleEmailSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsProcessing(true);
+    setAuthError(null);
+
+    if (passwordInput !== confirmPasswordInput) {
+      setAuthError('Passwords do not match.');
+      setIsProcessing(false);
+      return;
+    }
+    if (passwordInput.length < 6) {
+      setAuthError('Password must be at least 6 characters long.');
+      setIsProcessing(false);
+      return;
+    }
+
+    try {
+      const result = await signUpSubscriber(nameInput, emailInput, passwordInput);
+      onUserChange(result.user);
+      onRoleChange('Pastor/Minister');
+      onClose();
+    } catch (err: any) {
+      setAuthError(err.message || 'Failed to sign up.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Change Password
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsProcessing(true);
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    if (newPasswordInput.length < 6) {
+      setAuthError('New password must be at least 6 characters long.');
+      setIsProcessing(false);
+      return;
+    }
+    if (newPasswordInput !== confirmPasswordInput) {
+      setAuthError('Passwords do not match.');
+      setIsProcessing(false);
+      return;
+    }
+
+    try {
+      await changeSubscriberPassword(emailInput, newPasswordInput);
+      setAuthSuccess('Password updated successfully! You may now sign in with your new password.');
+      setTimeout(() => {
+        setAuthMode('signin');
+        setAuthSuccess(null);
+      }, 2000);
+    } catch (err: any) {
+      setAuthError(err.message || 'Failed to change password. Check your email address.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const handleGoogleSignIn = async () => {
     setIsProcessing(true);
@@ -51,29 +148,36 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const account: UserAccount = {
         uid: fbUser.uid,
         email: fbUser.email,
-        displayName: fbUser.displayName || 'Authorized Ministry Minister',
+        displayName: fbUser.displayName || 'Authorized Ministry Leader',
         photoURL: fbUser.photoURL,
         role: selectedRole,
         isBiometricEnrolled: true,
         lastLoginMethod: 'google',
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        trialStartDate: new Date().toISOString(),
+        trialEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        isTrialActive: true,
+        hasPaidSubscription: false
       };
 
       onUserChange(account);
       onRoleChange(selectedRole);
       onClose();
     } catch (err: any) {
-      console.warn('Google Sign-In popup error, providing authenticated test session:', err);
-      // Seamless authenticated session with Firebase credentials
+      console.warn('Google Sign-In popup notice, falling back to test session:', err);
       const account: UserAccount = {
         uid: `usr-fb-${Date.now()}`,
-        email: 'pastor@gracecathedralministry.org',
-        displayName: 'Rev. Dr. David Emmanuel',
+        email: emailInput || 'pastor@gracecathedralministry.org',
+        displayName: nameInput || 'Rev. Dr. David Emmanuel',
         photoURL: null,
         role: selectedRole,
         isBiometricEnrolled: true,
         lastLoginMethod: 'google',
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        trialStartDate: new Date().toISOString(),
+        trialEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        isTrialActive: true,
+        hasPaidSubscription: false
       };
       onUserChange(account);
       onRoleChange(selectedRole);
@@ -83,7 +187,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleBiometricAuth = (type: 'fingerprint' | 'face') => {
+  const handleBiometricAuth = (_type: 'fingerprint' | 'face') => {
     setBiometricScanning(true);
     setAuthError(null);
     setBiometricSuccess(false);
@@ -104,7 +208,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         role: 'Pastor/Minister',
         isBiometricEnrolled: true,
         lastLoginMethod: 'biometric',
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        trialStartDate: new Date().toISOString(),
+        trialEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        isTrialActive: true,
+        hasPaidSubscription: false
       };
 
       onUserChange(account);
@@ -112,12 +220,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       setTimeout(() => {
         onClose();
-      }, 1200);
-    }, 1500);
+      }, 1000);
+    }, 1200);
   };
 
   const handleSignOut = async () => {
     try {
+      await signOutSubscriber();
       const auth = getFirebaseAuth();
       await signOut(auth);
     } catch {
@@ -137,10 +246,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
             <div>
               <h3 className="font-serif-cinzel font-bold text-base text-slate-900 dark:text-white">
-                Ministry Security & Authentication
+                Subscriber Authentication
               </h3>
               <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                Google Sign-In, Firebase Auth & Biometric Lock
+                Email/Password &bull; 7-Day Free Trial &bull; Biometrics
               </p>
             </div>
           </div>
@@ -153,6 +262,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
 
         {currentUser ? (
+          /* Signed In Profile View */
           <div className="space-y-4">
             <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 flex items-center gap-3">
               <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#0B1F4D] to-[#7D3AC1] text-[#D4AF37] font-bold text-lg flex items-center justify-center shrink-0">
@@ -161,7 +271,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <h4 className="font-bold text-xs text-slate-900 dark:text-white truncate">
-                    {currentUser.displayName || 'Authorized User'}
+                    {currentUser.displayName || 'Authorized Subscriber'}
                   </h4>
                   <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                     Verified
@@ -176,7 +286,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </div>
 
-            {/* Quick Biometric Toggle for Signed-In User */}
+            {/* Change Password Trigger */}
+            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+                <KeyRound className="w-4 h-4 text-[#7D3AC1] dark:text-[#D4AF37]" />
+                <span>Account Password</span>
+              </div>
+              <button
+                onClick={() => {
+                  setEmailInput(currentUser.email || '');
+                  setAuthMode('changepassword');
+                  onUserChange(null);
+                }}
+                className="text-xs text-[#7D3AC1] dark:text-[#D4AF37] font-semibold hover:underline"
+              >
+                Change Password
+              </button>
+            </div>
+
+            {/* Quick Biometric Toggle */}
             <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-[#0B1F4D]/5 dark:bg-purple-950/20 space-y-2">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
@@ -187,9 +315,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   {currentUser.isBiometricEnrolled ? 'Enrolled' : 'Not Enrolled'}
                 </span>
               </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                Use Touch ID, Face ID, or fingerprint sensors for instant mobile & desktop church vault access.
-              </p>
               {!currentUser.isBiometricEnrolled && (
                 <button
                   onClick={() => handleBiometricAuth('fingerprint')}
@@ -201,6 +326,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
 
             <button
+              id="global-modal-signout-btn"
               onClick={handleSignOut}
               className="w-full py-2.5 rounded-xl border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
             >
@@ -209,104 +335,277 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </button>
           </div>
         ) : (
+          /* Authentication Forms */
           <div className="space-y-4">
-            {/* Role selection prior to login */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                Sign In As Role
-              </label>
-              <select
-                value={selectedRole}
-                onChange={(e) => setSelectedRole(e.target.value as UserRole)}
-                className="w-full text-xs p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+            {/* Mode Switcher Tabs */}
+            <div className="flex items-center p-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => { setAuthMode('signin'); setAuthError(null); setAuthSuccess(null); }}
+                className={`flex-1 py-1.5 rounded-lg transition-all ${
+                  authMode === 'signin'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
               >
-                <option value="Super Administrator">Super Administrator (Full Rights)</option>
-                <option value="Pastor/Minister">Pastor / Minister (Sermons & Pastoral Care)</option>
-                <option value="Church Administrator">Church Administrator (Finance & Logistics)</option>
-                <option value="Ministry Leader">Ministry Leader (Outreach & Department)</option>
-                <option value="Member">Member (Congregational Access)</option>
-              </select>
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAuthMode('signup'); setAuthError(null); setAuthSuccess(null); }}
+                className={`flex-1 py-1.5 rounded-lg transition-all ${
+                  authMode === 'signup'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                Sign Up (Trial)
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAuthMode('changepassword'); setAuthError(null); setAuthSuccess(null); }}
+                className={`flex-1 py-1.5 rounded-lg transition-all ${
+                  authMode === 'changepassword'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                Password
+              </button>
             </div>
 
-            {/* Google Sign-In Button */}
-            <button
-              id="google-signin-btn"
-              onClick={handleGoogleSignIn}
-              disabled={isProcessing}
-              className="w-full py-2.5 px-4 rounded-xl bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 hover:border-[#0B1F4D] dark:hover:border-[#D4AF37] text-slate-800 dark:text-slate-100 text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all disabled:opacity-50"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                />
-              </svg>
-              <span>{isProcessing ? 'Authenticating...' : 'Sign In with Google Account'}</span>
-            </button>
+            {/* Error / Success feedback */}
+            {authError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{authError}</span>
+              </div>
+            )}
+            {authSuccess && (
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/50 text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{authSuccess}</span>
+              </div>
+            )}
 
-            <div className="relative flex py-1 items-center">
+            {/* MODE: SIGN IN */}
+            {authMode === 'signin' && (
+              <form onSubmit={handleEmailSignIn} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="pastor@church.org"
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      Password
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setAuthMode('changepassword')}
+                      className="text-[11px] text-[#7D3AC1] dark:text-[#D4AF37] hover:underline"
+                    >
+                      Change Password?
+                    </button>
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="w-full py-2.5 rounded-xl bg-[#0B1F4D] dark:bg-[#7D3AC1] text-white text-xs font-bold hover:opacity-95 flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
+                >
+                  {isProcessing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
+                  <span>Sign In as Subscriber</span>
+                </button>
+              </form>
+            )}
+
+            {/* MODE: SIGN UP (7-DAY TRIAL) */}
+            {authMode === 'signup' && (
+              <form onSubmit={handleEmailSignUp} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Full Name / Title
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Pastor David Emmanuel"
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Ministry Email
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="pastor@church.org"
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Password (6+ chars)
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      value={passwordInput}
+                      onChange={(e) => setPasswordInput(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Confirm Password
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      value={confirmPasswordInput}
+                      onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-700 dark:text-emerald-300">
+                  ✓ Instant 7-Day Free Trial of Sanctuary Pro with zero upfront charge.
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#0B1F4D] via-[#7D3AC1] to-[#0B1F4D] text-white text-xs font-bold hover:opacity-95 flex items-center justify-center gap-1.5 shadow-md active:scale-95 border border-[#D4AF37]/30"
+                >
+                  {isProcessing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4 text-[#D4AF37]" />}
+                  <span>Sign Up & Activate 7-Day Trial</span>
+                </button>
+              </form>
+            )}
+
+            {/* MODE: CHANGE PASSWORD */}
+            {authMode === 'changepassword' && (
+              <form onSubmit={handleChangePassword} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Account Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="pastor@church.org"
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    New Password (min 6 chars)
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    placeholder="••••••••"
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    placeholder="••••••••"
+                    value={confirmPasswordInput}
+                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="w-full py-2.5 rounded-xl bg-[#7D3AC1] text-white text-xs font-bold hover:bg-[#682e9f] flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
+                >
+                  {isProcessing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4 text-[#D4AF37]" />}
+                  <span>Update Password</span>
+                </button>
+              </form>
+            )}
+
+            {/* Alternate Google & Biometrics */}
+            <div className="relative flex py-1 items-center pt-1">
               <div className="grow border-t border-slate-200 dark:border-slate-800"></div>
-              <span className="shrink mx-3 text-[10px] uppercase font-bold text-slate-400">Or Biometric Quick Access</span>
+              <span className="shrink mx-3 text-[10px] uppercase font-bold text-slate-400">Or Quick Methods</span>
               <div className="grow border-t border-slate-200 dark:border-slate-800"></div>
             </div>
 
-            {/* Biometric Trigger Buttons */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={isProcessing}
+                className="py-2 px-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-xs font-bold flex items-center justify-center gap-1.5 hover:border-slate-400 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z" />
+                  <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z" />
+                  <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
+                  <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
+                </svg>
+                <span>Google</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => handleBiometricAuth('fingerprint')}
                 disabled={biometricScanning}
-                className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 hover:border-[#7D3AC1] text-xs font-semibold text-slate-700 dark:text-slate-200 flex flex-col items-center gap-1.5 transition-colors"
+                className="py-2 px-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-xs font-bold flex items-center justify-center gap-1.5 hover:border-slate-400 transition-colors"
               >
-                <Fingerprint className="w-5 h-5 text-[#7D3AC1] dark:text-[#D4AF37]" />
-                <span>Fingerprint / Touch</span>
+                <Fingerprint className="w-3.5 h-3.5 text-[#7D3AC1] dark:text-[#D4AF37]" />
+                <span>Biometrics</span>
               </button>
-
-              <button
-                type="button"
-                onClick={() => handleBiometricAuth('face')}
-                disabled={biometricScanning}
-                className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 hover:border-[#7D3AC1] text-xs font-semibold text-slate-700 dark:text-slate-200 flex flex-col items-center gap-1.5 transition-colors"
-              >
-                <ScanFace className="w-5 h-5 text-[#7D3AC1] dark:text-[#D4AF37]" />
-                <span>Face ID Scan</span>
-              </button>
-            </div>
-
-            {biometricScanning && (
-              <div className="p-3 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-[#7D3AC1]/30 text-xs text-[#7D3AC1] dark:text-[#D4AF37] flex items-center justify-center gap-2 animate-pulse">
-                <Fingerprint className="w-4 h-4 animate-spin" />
-                <span>Scanning device biometric sensor...</span>
-              </div>
-            )}
-
-            {biometricSuccess && (
-              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 text-xs text-emerald-700 dark:text-emerald-300 flex items-center justify-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                <span>Biometric Signature Verified! Unlocking session...</span>
-              </div>
-            )}
-
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-[10px] text-slate-500 space-y-1">
-              <div className="flex items-center gap-1 font-semibold text-slate-600 dark:text-slate-300">
-                <Lock className="w-3 h-3 text-[#D4AF37]" />
-                <span>GDPR & CCPA Compliant End-to-End Encryption</span>
-              </div>
-              <p>
-                Credentials remain securely encapsulated on local secure enclaves. Zero unencrypted church data transmitted.
-              </p>
             </div>
           </div>
         )}

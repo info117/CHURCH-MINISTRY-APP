@@ -80,12 +80,16 @@ import {
   saveAnnouncementToFirestore,
   subscribeToChurchMembers,
   saveMemberToFirestore,
-  testFirestoreConnection
+  testFirestoreConnection,
+  startHighUrgencyPrayerAlertBackgroundJob,
+  getStoredPrayerEmailAlerts
 } from './lib/firebase';
 import { fcmService, PushNotificationPayload } from './lib/fcmService';
 import { initializeChurchBrandTheme } from './lib/themeService';
 import { startCelebrationWatcher } from './lib/celebrationWatcher';
-import { Bell, X, CheckCircle2 } from 'lucide-react';
+import { PrayerEmailAlertModal } from './components/PrayerEmailAlertModal';
+import { SimulatedPrayerEmailAlert } from './types';
+import { Bell, X, CheckCircle2, Mail, ShieldAlert } from 'lucide-react';
 
 export default function App() {
   // Theme state
@@ -168,6 +172,12 @@ export default function App() {
   const [sermonThemeFocus, setSermonThemeFocus] = useState<string>('');
   const [activePushToast, setActivePushToast] = useState<PushNotificationPayload | null>(null);
 
+  // High-Urgency Prayer Email Alert States (Firebase Background Job)
+  const [activeEmailAlertToast, setActiveEmailAlertToast] = useState<SimulatedPrayerEmailAlert | null>(null);
+  const [selectedEmailAlertForModal, setSelectedEmailAlertForModal] = useState<SimulatedPrayerEmailAlert | null>(null);
+  const [isEmailAlertModalOpen, setIsEmailAlertModalOpen] = useState<boolean>(false);
+  const [allPrayerEmailAlerts, setAllPrayerEmailAlerts] = useState<SimulatedPrayerEmailAlert[]>(() => getStoredPrayerEmailAlerts());
+
   // Tour & ThinkBible states
   const [isTourOpen, setIsTourOpen] = useState<boolean>(false);
   const [currentTourStepIndex, setCurrentTourStepIndex] = useState<number>(0);
@@ -185,6 +195,25 @@ export default function App() {
     });
 
     return () => unsubscribe();
+  }, []);
+
+  // Initialize Firebase high-urgency prayer simulated email alert background job
+  useEffect(() => {
+    const stopPrayerAlertJob = startHighUrgencyPrayerAlertBackgroundJob((alert) => {
+      setActiveEmailAlertToast(alert);
+      setSelectedEmailAlertForModal(alert);
+      setAllPrayerEmailAlerts(prev => [alert, ...prev.filter(a => a.id !== alert.id)]);
+
+      // Auto dismiss email alert toast after 9 seconds
+      const timer = setTimeout(() => {
+        setActiveEmailAlertToast(current => (current?.id === alert.id ? null : current));
+      }, 9000);
+      return () => clearTimeout(timer);
+    });
+
+    return () => {
+      stopPrayerAlertJob();
+    };
   }, []);
 
   // Firebase Firestore real-time synchronization listeners
@@ -432,6 +461,7 @@ export default function App() {
             setCurrentTourStepIndex(0);
           }}
           onOpenThinkBible={() => setIsThinkBibleOpen(true)}
+          churchSubscription={churchSubscription}
         />
 
         {/* Scrollable View Content Canvas */}
@@ -514,16 +544,17 @@ export default function App() {
                 ]}
                 prayerRequests={prayers}
                 onAddPrayerRequest={(req) => {
-                  setPrayers(prev => [req, ...prev]);
-                  savePrayerToFirestore(req);
+                  setPrayers(prev => [req, ...prev.filter(p => p.id !== req.id)]);
                 }}
                 onUpdatePrayerStatus={(id, status) => {
+                  const target = prayers.find(p => p.id === id);
                   setPrayers(prev => prev.map(p => (p.id === id ? { ...p, status } : p)));
-                  updatePrayerStatusInFirestore(id, status);
+                  updatePrayerStatusInFirestore(id, status, target);
                 }}
                 onUpdatePrayerUrgency={(id, urgencyLevel) => {
+                  const target = prayers.find(p => p.id === id);
                   setPrayers(prev => prev.map(p => (p.id === id ? { ...p, urgencyLevel } : p)));
-                  updatePrayerUrgencyInFirestore(id, urgencyLevel);
+                  updatePrayerUrgencyInFirestore(id, urgencyLevel, target);
                 }}
                 selectedTranslation={selectedTranslation}
               />
@@ -546,6 +577,8 @@ export default function App() {
                   setOperations(prev => prev.map(o => (o.id === op.id ? op : o)))
                 }
                 onDeleteOperation={(id) => setOperations(prev => prev.filter(o => o.id !== id))}
+                churchProfile={churchProfile}
+                onOpenPrint={handlePrintBulletin}
               />
             )}
 
@@ -628,6 +661,8 @@ export default function App() {
               <SubscriptionsBillingView
                 subscription={churchSubscription}
                 churchProfile={churchProfile}
+                currentUser={currentUser}
+                onUserChange={setCurrentUser}
                 onUpdateSubscription={(newSub) => {
                   setChurchSubscription(newSub);
                   saveLocalSubscription(newSub);
@@ -739,6 +774,81 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* High-Urgency Prayer Simulated Email Alert Real-time Notification */}
+      {activeEmailAlertToast && (
+        <div
+          id="prayer-email-alert-toast"
+          role="alert"
+          className="fixed top-20 right-4 z-50 max-w-md w-full p-4 rounded-2xl bg-[#18080C]/95 text-white border border-red-500/60 shadow-2xl backdrop-blur-xl animate-in slide-in-from-top-4 duration-300"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-red-600 text-white shrink-0 mt-0.5 shadow-md">
+                <ShieldAlert className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-red-200 uppercase tracking-wider bg-red-500/20 px-2 py-0.5 rounded-full border border-red-500/30">
+                    {activeEmailAlertToast.urgencyLevel} Prayer Alert
+                  </span>
+                  <span className="text-[10px] text-slate-300">Firebase Background Job</span>
+                </div>
+                <h4 className="font-bold text-sm text-white mt-1 line-clamp-1">
+                  {activeEmailAlertToast.prayerTitle}
+                </h4>
+                <p className="text-xs text-red-100/80 mt-1 line-clamp-2">
+                  Simulated email alert dispatched to pastoral intercessors for petition from {activeEmailAlertToast.requester}.
+                </p>
+                <div className="flex items-center gap-2 mt-3">
+                  <button
+                    onClick={() => {
+                      setSelectedEmailAlertForModal(activeEmailAlertToast);
+                      setIsEmailAlertModalOpen(true);
+                      setActiveEmailAlertToast(null);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>View Email Alert</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveToolId('devotionals');
+                      setActiveEmailAlertToast(null);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 text-xs font-semibold transition-colors"
+                  >
+                    Open Altar
+                  </button>
+                  <button
+                    onClick={() => setActiveEmailAlertToast(null)}
+                    className="px-2 py-1.5 text-xs text-slate-400 hover:text-white"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveEmailAlertToast(null)}
+              className="text-slate-400 hover:text-white p-1 transition-colors"
+              aria-label="Dismiss Alert"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Simulated Email Inspection Modal */}
+      <PrayerEmailAlertModal
+        isOpen={isEmailAlertModalOpen}
+        onClose={() => setIsEmailAlertModalOpen(false)}
+        alert={selectedEmailAlertForModal}
+        allAlerts={allPrayerEmailAlerts}
+        onSelectAlert={(a) => setSelectedEmailAlertForModal(a)}
+      />
 
       {/* Interactive App Feature Tour */}
       <AppTour

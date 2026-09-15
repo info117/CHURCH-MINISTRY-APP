@@ -32,6 +32,7 @@ import {
   Legend
 } from 'recharts';
 import { ChurchMember, FellowshipGroup, UserRole } from '../../types';
+import { AttendanceHeatmap } from '../AttendanceHeatmap';
 
 interface CongregationViewProps {
   members: ChurchMember[];
@@ -551,6 +552,9 @@ export const CongregationView: React.FC<CongregationViewProps> = ({
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* Weekly Attendance Heatmap (Visualizing Attendance Trends & Peak Assembly Times) */}
+      <AttendanceHeatmap />
 
       {/* Search & Department / Status Filter Bar */}
       <div className="bg-white dark:bg-[#071430] p-4 rounded-2xl border border-slate-200 dark:border-indigo-950 shadow-xs space-y-3">

@@ -216,12 +216,10 @@ ACTION:sermons:Open Sermon Builder`;
 **CHURCH MINISTRY APP** offers transparent, steward-friendly pricing for churches and ministries:
 
 - **Sanctuary Pro**:
-  - **$19.99/Monthly** — Flexible month-to-month subscription.
+  - **7-Day Free Trial** on Sign Up (Full Sanctuary Pro access, no upfront payment required).
+  - **$19.99/Monthly** — Flexible month-to-month subscription after trial.
   - **$199.99/yearly** — Annual stewardship savings (~17% discount / 2 complimentary months).
   - *Features Included*: Unlimited AI Expository Sermon Studio, Computer Vision Sanctuary Seating & OCR, real-time Google Cloud Firestore sync, member celebration watcher, and priority pastoral tech support.
-
-- **Ministry Starter ($0/mo)**: Free foundational tools for church plants and small house fellowships (up to 50 members).
-- **Cathedral Enterprise ($49.99/mo or $499.99/yr)**: Multi-campus sanctuary routing and custom white-label branding.
 
 All ministry plans include **501(c)(3) tax-exempt verification** (0% sales tax) and downloadable PDF receipts for church finance boards.
 
