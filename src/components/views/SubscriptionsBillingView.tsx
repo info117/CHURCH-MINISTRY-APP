@@ -25,8 +25,10 @@ import {
   KeyRound,
   UserCheck,
   User,
-  Zap
+  Zap,
+  Calculator
 } from 'lucide-react';
+import { StepReview } from '../StepReview';
 import {
   ChurchSubscriptionState,
   BillingCycle,
@@ -81,7 +83,7 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
 }) => {
   // Billing cycle toggle state: 'monthly' or 'yearly'
   const [selectedCycle, setSelectedCycle] = useState<BillingCycle>(subscription.billingCycle);
-  const [activeTab, setActiveTab] = useState<'plans' | 'payment' | 'invoices'>('plans');
+  const [activeTab, setActiveTab] = useState<'plans' | 'payment' | 'invoices' | 'tax-review'>('plans');
 
   // Subscriber User State (synced from prop or localStorage)
   const [subscriber, setSubscriber] = useState<UserAccount | null>(() => {
@@ -728,6 +730,19 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
           <Receipt className="w-4 h-4" />
           <span>Invoices & Receipts ({subscription.invoices.length})</span>
         </button>
+
+        <button
+          id="billing-tab-tax-review"
+          onClick={() => setActiveTab('tax-review')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors ${
+            activeTab === 'tax-review'
+              ? 'bg-[#7D3AC1] text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/60'
+          }`}
+        >
+          <Calculator className="w-4 h-4" />
+          <span>Tax Insights & Step Review</span>
+        </button>
       </div>
 
       {/* TAB 1: PLANS & PRICING (ONLY Sanctuary Pro: $19.99/mo and $199.99/yr) */}
@@ -1059,16 +1074,26 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
                 </button>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 flex items-center justify-between">
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <span className="text-slate-400 block text-[11px]">501(c)(3) Tax Exemption Number:</span>
                   <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                     {subscription.churchTaxExemptId || 'EXEMPT-501C3-984321'}
                   </span>
                 </div>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                  Tax Exempt (0% Tax)
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                    Tax Exempt (0% Tax)
+                  </span>
+                  <button
+                    onClick={() => setActiveTab('tax-review')}
+                    id="view-tax-insights-btn"
+                    className="text-[11px] text-[#7D3AC1] dark:text-[#D4AF37] font-semibold hover:underline flex items-center gap-1"
+                  >
+                    <span>View Tax Insights Table</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1176,6 +1201,19 @@ export const SubscriptionsBillingView: React.FC<SubscriptionsBillingViewProps> =
               </table>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* TAB 4: STEP REVIEW & TAX INSIGHTS */}
+      {activeTab === 'tax-review' && (
+        <div className="space-y-4">
+          <StepReview
+            onBack={() => setActiveTab('payment')}
+            onConfirm={() => {
+              showToast('Tax review verified and confirmed for administrative filing.', 'success');
+              setActiveTab('payment');
+            }}
+          />
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getFirestore, 
+  initializeFirestore,
   doc, 
   setDoc, 
   updateDoc,
@@ -58,12 +59,25 @@ export function getFirebaseApp() {
   return getApp();
 }
 
+let dbInstance: ReturnType<typeof getFirestore> | null = null;
+
 export function getDb() {
+  if (dbInstance) return dbInstance;
   const app = getFirebaseApp();
-  if (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)') {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  const dbId = (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)')
+    ? firebaseConfig.firestoreDatabaseId
+    : undefined;
+
+  try {
+    // Enable long polling to prevent WebChannel timeout in container / proxy / iframe environments
+    dbInstance = initializeFirestore(app, {
+      experimentalForceLongPolling: true,
+    }, dbId);
+  } catch {
+    // If already initialized or fallback needed, retrieve existing instance
+    dbInstance = dbId ? getFirestore(app, dbId) : getFirestore(app);
   }
-  return getFirestore(app);
+  return dbInstance;
 }
 
 export function getFirebaseAuth() {
@@ -123,12 +137,24 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   return errInfo;
 }
 
-// Connection tester on boot
+// Connection tester with resilient timeout to prevent 10s backend hangs
 export async function testFirestoreConnection(): Promise<boolean> {
   try {
     const db = getDb();
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    return true;
+    const checkPromise = getDoc(doc(db, 'test', 'connection'))
+      .then(() => true)
+      .catch((err: any) => {
+        if (err?.code === 'unavailable' || err?.message?.includes('offline')) {
+          return false;
+        }
+        return true;
+      });
+
+    const timeoutPromise = new Promise<boolean>((resolve) => 
+      setTimeout(() => resolve(false), 3500)
+    );
+
+    return await Promise.race([checkPromise, timeoutPromise]);
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('Firestore client is currently offline. Operating in resilient cache mode.');
@@ -136,9 +162,6 @@ export async function testFirestoreConnection(): Promise<boolean> {
     return false;
   }
 }
-
-// Initial fire-and-forget connection test
-testFirestoreConnection().catch(() => {});
 
 // ============================================================================
 // SIMULATED EMAIL ALERT BACKGROUND JOB FOR HIGH-URGENCY PRAYER PETITIONS

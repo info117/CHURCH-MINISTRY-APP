@@ -31,7 +31,13 @@ import {
   Phone,
   Mail,
   Copy,
-  Boxes
+  Boxes,
+  Radio,
+  Activity,
+  UserPlus,
+  AlertCircle,
+  Filter,
+  ExternalLink
 } from 'lucide-react';
 import {
   ChurchProfile,
@@ -45,7 +51,7 @@ import {
 } from '../../types';
 import { sampleMembers } from '../../data/initialData';
 import { DailyScriptureReflectionWidget } from '../DailyScriptureReflectionWidget';
-import { generatePastoralMilestoneGreeting } from '../../lib/celebrationWatcher';
+import { generatePastoralMilestoneGreeting, checkMemberCelebrations } from '../../lib/celebrationWatcher';
 
 interface DashboardViewProps {
   churchProfile: ChurchProfile;
@@ -316,9 +322,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       priority: item.daysUntil <= 1 ? 'today' : 'upcoming'
     });
   };
+
+  // Filter state for the new Upcoming Celebrations (Current Week) widget
+  const [weeklyCelebrationFilter, setWeeklyCelebrationFilter] = useState<'all' | 'birthdays' | 'anniversaries'>('all');
+
+  // Calculate celebrations occurring in the CURRENT WEEK (0 to 7 days) using existing celebrationAlerts state
+  const currentWeekCelebrations = useMemo(() => {
+    // Rely primarily on celebrationAlerts passed from root celebrationWatcher
+    const sourceAlerts = (celebrationAlerts && celebrationAlerts.length > 0)
+      ? celebrationAlerts
+      : checkMemberCelebrations(effectiveMembers, new Date(), 7);
+
+    return sourceAlerts
+      .filter((alert) => alert.daysUntil >= 0 && alert.daysUntil <= 7)
+      .sort((a, b) => a.daysUntil - b.daysUntil);
+  }, [celebrationAlerts, effectiveMembers]);
+
+  const weeklyBirthdays = useMemo(() => {
+    return currentWeekCelebrations.filter((a) => a.type === 'Birthday');
+  }, [currentWeekCelebrations]);
+
+  const weeklyAnniversaries = useMemo(() => {
+    return currentWeekCelebrations.filter((a) => a.type === 'Wedding Anniversary');
+  }, [currentWeekCelebrations]);
+
+  const displayedWeeklyCelebrations = useMemo(() => {
+    if (weeklyCelebrationFilter === 'birthdays') return weeklyBirthdays;
+    if (weeklyCelebrationFilter === 'anniversaries') return weeklyAnniversaries;
+    return currentWeekCelebrations;
+  }, [weeklyCelebrationFilter, currentWeekCelebrations, weeklyBirthdays, weeklyAnniversaries]);
+
   const [enabledWidgets, setEnabledWidgets] = useState({
     verseOfDay: true,
     quickStats: true,
+    upcomingCelebrations: true,
+    activityFeed: true,
     attendanceTrend: true,
     celebrations: true,
     upcomingOps: true,
@@ -327,6 +365,110 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     prayerRequests: true,
     visionCard: true
   });
+
+  // Filter state for Church Activity Feed
+  const [activityFilter, setActivityFilter] = useState<'all' | 'operations' | 'members' | 'prayers'>('all');
+
+  // Real-time Church Activity Feed aggregation (operations, new member sign-ups, urgent prayers)
+  const activityFeedItems = useMemo(() => {
+    const items: Array<{
+      id: string;
+      type: 'operation' | 'member' | 'prayer';
+      title: string;
+      subtitle: string;
+      date: string;
+      status: string;
+      statusColor: string;
+      badgeText: string;
+      details: string;
+      actionText: string;
+      actionTarget: string;
+      rawDate: Date;
+    }> = [];
+
+    // 1. Recent Ministry Operations
+    (operations || []).forEach((op) => {
+      const dateStr = op.startDate || op.date || '2026-09-15';
+      const parsedDate = new Date(dateStr);
+      items.push({
+        id: `op-${op.id}`,
+        type: 'operation',
+        title: op.name,
+        subtitle: `${op.type} • ${op.location || 'Sanctuary'}`,
+        date: dateStr,
+        status: op.status,
+        statusColor:
+          op.status === 'Active'
+            ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+            : op.status === 'Completed'
+            ? 'bg-purple-100 dark:bg-purple-950/60 text-[#7D3AC1] dark:text-purple-300'
+            : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300',
+        badgeText: 'Ministry Operation',
+        details: `Speaker: ${op.speaker || 'Pastoral Team'} • Expected Attendance: ${op.expectedAttendance || 500}${op.actualAttendance ? ` (Actual: ${op.actualAttendance})` : ''}`,
+        actionText: 'View Operations',
+        actionTarget: 'operations',
+        rawDate: isNaN(parsedDate.getTime()) ? new Date() : parsedDate
+      });
+    });
+
+    // 2. New Member Sign-ups
+    (effectiveMembers || []).forEach((m) => {
+      const dateStr = m.joinedDate || '2026-09-15';
+      const parsedDate = new Date(dateStr);
+      items.push({
+        id: `mem-${m.id}`,
+        type: 'member',
+        title: `New Member: ${m.firstName} ${m.lastName}`,
+        subtitle: `${m.fellowship} Department • Role: ${m.role}`,
+        date: dateStr,
+        status: m.activeStatus ? 'Active' : 'Inactive',
+        statusColor: m.activeStatus
+          ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400',
+        badgeText: 'New Member Sign-up',
+        details: `${m.email} • Phone: ${m.phone} • Attendance Score: ${m.attendanceScore}%`,
+        actionText: 'Congregation Roster',
+        actionTarget: 'congregation',
+        rawDate: isNaN(parsedDate.getTime()) ? new Date() : parsedDate
+      });
+    });
+
+    // 3. Urgent Prayer Requests
+    (prayers || [])
+      .filter((p) => p.status === 'Urgent' || p.urgencyLevel === 'Urgent' || p.urgencyLevel === 'Critical')
+      .forEach((p) => {
+        const dateStr = p.date || '2026-09-15';
+        const parsedDate = new Date(dateStr);
+        items.push({
+          id: `prayer-${p.id}`,
+          type: 'prayer',
+          title: `Urgent Petition: ${p.title}`,
+          subtitle: `Category: ${p.category} • Requester: ${p.requester}`,
+          date: dateStr,
+          status: 'Urgent',
+          statusColor: 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 font-bold',
+          badgeText: 'Urgent Intercession',
+          details: p.description,
+          actionText: 'Intercession Wall',
+          actionTarget: 'devotionals',
+          rawDate: isNaN(parsedDate.getTime()) ? new Date() : parsedDate
+        });
+      });
+
+    // Sort by timestamp descending
+    return items.sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
+  }, [operations, effectiveMembers, prayers]);
+
+  const operationFeedItems = useMemo(() => activityFeedItems.filter((i) => i.type === 'operation'), [activityFeedItems]);
+  const memberFeedItems = useMemo(() => activityFeedItems.filter((i) => i.type === 'member'), [activityFeedItems]);
+  const prayerFeedItems = useMemo(() => activityFeedItems.filter((i) => i.type === 'prayer'), [activityFeedItems]);
+
+  const displayedActivityItems = useMemo(() => {
+    if (activityFilter === 'operations') return operationFeedItems;
+    if (activityFilter === 'members') return memberFeedItems;
+    if (activityFilter === 'prayers') return prayerFeedItems;
+    return activityFeedItems;
+  }, [activityFilter, activityFeedItems, operationFeedItems, memberFeedItems, prayerFeedItems]);
 
   // Calculate 6-month expected vs actual attendance trend from operations state
   const attendanceTrendData = useMemo(() => {
@@ -557,6 +699,203 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               PDF Print & Study Ready
             </div>
           </div>
+        </div>
+      )}
+
+      {/* NEW WIDGET: Upcoming Celebrations (Current Week) */}
+      {enabledWidgets.upcomingCelebrations && (
+        <div
+          id="upcoming-celebrations-widget"
+          className="p-5 md:p-6 rounded-2xl bg-white dark:bg-[#071430] border border-slate-200 dark:border-indigo-950 shadow-xs space-y-4"
+        >
+          {/* Header Row */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-gradient-to-br from-[#D4AF37] to-[#8C6D1F] text-[#0B1F4D] shadow-xs">
+                <Gift className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-serif-cinzel font-bold text-base md:text-lg text-slate-900 dark:text-white">
+                    Upcoming Celebrations
+                  </h3>
+                  <span className="text-[10px] font-sans font-bold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/40 text-[#7D3AC1] dark:text-purple-300">
+                    Current Week ({currentWeekCelebrations.length})
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Members with birthdays and anniversaries in the current week using celebration alerts.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Category Filter Chips */}
+              <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl text-xs">
+                <button
+                  onClick={() => setWeeklyCelebrationFilter('all')}
+                  id="weekly-filter-all-btn"
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-colors cursor-pointer ${
+                    weeklyCelebrationFilter === 'all'
+                      ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  All ({currentWeekCelebrations.length})
+                </button>
+                <button
+                  onClick={() => setWeeklyCelebrationFilter('birthdays')}
+                  id="weekly-filter-birthdays-btn"
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-colors cursor-pointer ${
+                    weeklyCelebrationFilter === 'birthdays'
+                      ? 'bg-[#7D3AC1] text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Birthdays ({weeklyBirthdays.length})
+                </button>
+                <button
+                  onClick={() => setWeeklyCelebrationFilter('anniversaries')}
+                  id="weekly-filter-anniversaries-btn"
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-colors cursor-pointer ${
+                    weeklyCelebrationFilter === 'anniversaries'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Anniversaries ({weeklyAnniversaries.length})
+                </button>
+              </div>
+
+              <button
+                onClick={() => onNavigateTo('congregation')}
+                className="text-xs text-[#7D3AC1] dark:text-[#D4AF37] font-semibold hover:underline flex items-center gap-1 shrink-0"
+              >
+                <span>Directory</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Members List / Cards */}
+          {displayedWeeklyCelebrations.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {displayedWeeklyCelebrations.map((alert) => {
+                const isBirthday = alert.type === 'Birthday';
+                const isToday = alert.daysUntil === 0;
+                const isTomorrow = alert.daysUntil === 1;
+
+                return (
+                  <div
+                    key={alert.id}
+                    id={`celebration-card-${alert.id}`}
+                    className={`p-4 rounded-xl border transition-all space-y-3 ${
+                      isToday
+                        ? 'bg-gradient-to-br from-amber-500/10 via-purple-500/10 to-transparent border-amber-400/60 dark:border-amber-500/40 shadow-xs'
+                        : isBirthday
+                        ? 'bg-slate-50/70 dark:bg-slate-900/40 border-slate-200/80 dark:border-indigo-950/80 hover:border-purple-300 dark:hover:border-purple-800'
+                        : 'bg-slate-50/70 dark:bg-slate-900/40 border-slate-200/80 dark:border-indigo-950/80 hover:border-rose-300 dark:hover:border-rose-800'
+                    }`}
+                  >
+                    {/* Card Top: Badges */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                          isBirthday
+                            ? 'bg-purple-100 dark:bg-purple-900/40 text-[#7D3AC1] dark:text-purple-300'
+                            : 'bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300'
+                        }`}
+                      >
+                        {isBirthday ? <Cake className="w-3 h-3" /> : <Heart className="w-3 h-3" />}
+                        <span>{isBirthday ? 'Birthday' : 'Wedding Anniversary'}</span>
+                      </span>
+
+                      <span
+                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                          isToday
+                            ? 'bg-emerald-500 text-white animate-pulse'
+                            : isTomorrow
+                            ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                        }`}
+                      >
+                        {isToday
+                          ? 'TODAY'
+                          : isTomorrow
+                          ? 'Tomorrow'
+                          : `In ${alert.daysUntil} days`}
+                      </span>
+                    </div>
+
+                    {/* Member Info */}
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white shrink-0 ${
+                          isBirthday
+                            ? 'bg-gradient-to-br from-[#7D3AC1] to-[#0B1F4D]'
+                            : 'bg-gradient-to-br from-rose-500 to-[#7D3AC1]'
+                        }`}
+                      >
+                        {alert.memberName
+                          .split(' ')
+                          .map((n) => n[0])
+                          .slice(0, 2)
+                          .join('')}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                          {alert.memberName}
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                          {alert.fellowship || 'Sanctuary Member'} &bull; {alert.role || 'Member'}
+                        </div>
+                        <div className="text-xs font-semibold text-[#7D3AC1] dark:text-[#D4AF37] mt-0.5">
+                          {isBirthday ? (
+                            <span>
+                              {alert.ageOrYears ? `Celebrating ${alert.ageOrYears}th Birthday` : 'Birthday'} &bull; {alert.celebrationDateFormatted}
+                            </span>
+                          ) : (
+                            <span>
+                              {alert.ageOrYears ? `${alert.ageOrYears} Years of Marriage` : 'Anniversary'} &bull; {alert.celebrationDateFormatted}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Greeting Action */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                      <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                        {alert.phone || alert.email || 'Contact on file'}
+                      </span>
+                      <button
+                        onClick={() => setSelectedAlertForGreeting(alert)}
+                        id={`blessing-btn-${alert.id}`}
+                        className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-[#7D3AC1]/10 hover:bg-[#7D3AC1] text-[#7D3AC1] hover:text-white dark:text-[#D4AF37] dark:hover:bg-[#7D3AC1] dark:hover:text-white transition-all flex items-center gap-1 cursor-pointer"
+                        title="Prepare and send pastoral blessing"
+                      >
+                        <Sparkles className="w-3 h-3 text-[#D4AF37]" />
+                        <span>Pastoral Blessing</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-8 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-center space-y-2">
+              <div className="w-10 h-10 mx-auto rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400">
+                <Gift className="w-5 h-5" />
+              </div>
+              <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                No celebrations in the current 7-day week
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                No member birthdays or wedding anniversaries fall within the current week. All celebration greetings are up to date.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -964,6 +1303,154 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </LineChart>
             </ResponsiveContainer>
           </div>
+        </div>
+      )}
+
+      {/* Real-time Church Activity Feed Card */}
+      {enabledWidgets.activityFeed && (
+        <div
+          id="church-activity-feed-widget"
+          className="p-5 md:p-6 rounded-2xl bg-white dark:bg-[#071430] border border-slate-200 dark:border-indigo-950 shadow-xs space-y-4"
+        >
+          {/* Header Row */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-gradient-to-br from-[#0B1F4D] to-[#7D3AC1] text-[#D4AF37] shadow-xs shrink-0">
+                <Radio className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-serif-cinzel font-bold text-base md:text-lg text-slate-900 dark:text-white">
+                    Church Activity Feed
+                  </h3>
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                    <span>Real-time Stream</span>
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Live multi-source pulse tracking recent ministry operations, new congregation sign-ups, and urgent intercessions.
+                </p>
+              </div>
+            </div>
+
+            {/* Filter Tabs */}
+            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-800 overflow-x-auto self-start sm:self-center">
+              {[
+                { key: 'all', label: 'All Activities', count: activityFeedItems.length },
+                { key: 'operations', label: 'Operations', count: operationFeedItems.length },
+                { key: 'members', label: 'New Members', count: memberFeedItems.length },
+                { key: 'prayers', label: 'Urgent Prayers', count: prayerFeedItems.length }
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActivityFilter(tab.key as any)}
+                  id={`activity-feed-tab-${tab.key}`}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                    activityFilter === tab.key
+                      ? 'bg-[#0B1F4D] dark:bg-[#7D3AC1] text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                      activityFilter === tab.key
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Activity Items List */}
+          {displayedActivityItems.length === 0 ? (
+            <div className="p-8 rounded-xl bg-slate-50/70 dark:bg-slate-900/40 border border-dashed border-slate-200 dark:border-slate-800 text-center space-y-2">
+              <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center mx-auto">
+                <Activity className="w-5 h-5" />
+              </div>
+              <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                No active events in "{activityFilter}" category.
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Check other activity filters or view the main sanctuary modules.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {displayedActivityItems.slice(0, 6).map((item) => (
+                <div
+                  key={item.id}
+                  className="p-4 rounded-xl bg-slate-50/60 dark:bg-slate-900/50 border border-slate-200 dark:border-indigo-950 hover:border-[#7D3AC1] dark:hover:border-[#7D3AC1] transition-all flex flex-col justify-between space-y-3 group"
+                >
+                  <div className="space-y-2">
+                    {/* Top row: Badge & Status */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                          item.type === 'operation'
+                            ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+                            : item.type === 'member'
+                            ? 'bg-purple-100 dark:bg-purple-950/60 text-[#7D3AC1] dark:text-purple-300'
+                            : 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
+                        }`}
+                      >
+                        {item.type === 'operation' ? (
+                          <Flame className="w-3 h-3 text-amber-500" />
+                        ) : item.type === 'member' ? (
+                          <UserPlus className="w-3 h-3 text-[#7D3AC1]" />
+                        ) : (
+                          <AlertCircle className="w-3 h-3 text-rose-500" />
+                        )}
+                        <span>{item.badgeText}</span>
+                      </span>
+
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${item.statusColor}`}>
+                        {item.status}
+                      </span>
+                    </div>
+
+                    {/* Title and Subtitle */}
+                    <div>
+                      <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white line-clamp-1 group-hover:text-[#7D3AC1] dark:group-hover:text-[#D4AF37] transition-colors">
+                        {item.title}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
+                        {item.subtitle}
+                      </p>
+                    </div>
+
+                    {/* Details note */}
+                    <p className="text-[11px] text-slate-600 dark:text-slate-300 line-clamp-2 bg-white/70 dark:bg-slate-800/60 p-2 rounded-lg border border-slate-100 dark:border-slate-800/80">
+                      {item.details}
+                    </p>
+                  </div>
+
+                  {/* Footer with date and quick navigation action */}
+                  <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800 flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400 dark:text-slate-500 flex items-center gap-1 font-mono">
+                      <Clock className="w-3 h-3" />
+                      <span>{item.date}</span>
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTo(item.actionTarget)}
+                      className="text-xs font-bold text-[#7D3AC1] dark:text-[#D4AF37] hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>{item.actionText}</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

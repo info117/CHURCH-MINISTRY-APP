@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Flame,
   Plus,
@@ -14,7 +14,10 @@ import {
   Sparkles,
   Download,
   Printer,
-  FileText
+  FileText,
+  Activity,
+  CheckCircle,
+  BarChart3
 } from 'lucide-react';
 import { ChurchOperationEvent, ChurchProfile } from '../../types';
 import { downloadChurchOperationsReport } from '../../lib/pdfReportGenerator';
@@ -122,6 +125,69 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
     ? operations
     : operations.filter(o => o.type === filterType || o.status === filterType);
 
+  // Completion metrics tracked based on Active and Completed statuses
+  const progressStats = useMemo(() => {
+    const total = operations.length;
+    const completed = operations.filter((o) => o.status === 'Completed').length;
+    const active = operations.filter((o) => o.status === 'Active').length;
+    const planning = operations.filter((o) => o.status === 'Planning').length;
+
+    const completedPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const activePercentage = total > 0 ? Math.round((active / total) * 100) : 0;
+    const planningPercentage = total > 0 ? Math.round((planning / total) * 100) : 0;
+
+    return {
+      total,
+      completed,
+      active,
+      planning,
+      completedPercentage,
+      activePercentage,
+      planningPercentage
+    };
+  }, [operations]);
+
+  // Helper for progress status details per event
+  const getEventProgress = (status: ChurchOperationEvent['status']) => {
+    switch (status) {
+      case 'Completed':
+        return {
+          percentage: 100,
+          label: 'Completed',
+          stage: '100% Executed & Verified',
+          barColor: 'bg-emerald-500',
+          badgeColor: 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
+          icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+        };
+      case 'Active':
+        return {
+          percentage: 65,
+          label: 'Active',
+          stage: '65% In Progress & Mobilizing',
+          barColor: 'bg-gradient-to-r from-amber-500 to-[#7D3AC1]',
+          badgeColor: 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800',
+          icon: <Activity className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+        };
+      case 'Planning':
+      default:
+        return {
+          percentage: 25,
+          label: 'Planning',
+          stage: '25% Mobilization & Budgeting',
+          barColor: 'bg-blue-500',
+          badgeColor: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-800',
+          icon: <Clock className="w-3.5 h-3.5 text-blue-500" />
+        };
+    }
+  };
+
+  const handleStatusChange = (op: ChurchOperationEvent, newStatus: ChurchOperationEvent['status']) => {
+    onUpdateOperation({
+      ...op,
+      status: newStatus
+    });
+  };
+
   return (
     <div id="operations-view-container" className="space-y-6">
       {/* Banner */}
@@ -189,9 +255,100 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
         </div>
       )}
 
+      {/* Visual Operations Completion Tracker */}
+      <div
+        id="operations-completion-tracker-card"
+        className="p-5 md:p-6 rounded-2xl bg-white dark:bg-[#071430] border border-slate-200 dark:border-indigo-950 shadow-xs space-y-4"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-gradient-to-br from-emerald-500 to-[#0B1F4D] text-white shadow-xs">
+              <BarChart3 className="w-5 h-5 text-emerald-300" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="font-serif-cinzel font-bold text-base md:text-lg text-slate-900 dark:text-white">
+                  Ministry Operations Completion Tracker
+                </h2>
+                <span className="text-[10px] font-sans font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
+                  {progressStats.completedPercentage}% Completed
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Visual progress tracking for church operations based on Active and Completed execution status.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 flex-wrap text-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
+              <span className="text-slate-600 dark:text-slate-400 font-semibold">
+                Completed ({progressStats.completed})
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
+              <span className="text-slate-600 dark:text-slate-400 font-semibold">
+                Active ({progressStats.active})
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" />
+              <span className="text-slate-600 dark:text-slate-400 font-semibold">
+                Planning ({progressStats.planning})
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Multi-Segment Visual Progress Bar */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs font-semibold">
+            <span className="text-slate-700 dark:text-slate-300">
+              Operations Portfolio Completion ({progressStats.total} Total Operations)
+            </span>
+            <span className="text-[#7D3AC1] dark:text-[#D4AF37] font-mono font-bold text-[11px]">
+              {progressStats.completed} Completed &bull; {progressStats.active} Active &bull; {progressStats.planning} Planning
+            </span>
+          </div>
+
+          {/* Bar track */}
+          <div className="h-3.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden flex p-0.5 border border-slate-200 dark:border-slate-700">
+            {progressStats.completedPercentage > 0 && (
+              <div
+                className="h-full bg-emerald-500 rounded-l-full transition-all duration-500 flex items-center justify-center text-[9px] font-bold text-white overflow-hidden"
+                style={{ width: `${progressStats.completedPercentage}%` }}
+                title={`Completed: ${progressStats.completed} (${progressStats.completedPercentage}%)`}
+              >
+                {progressStats.completedPercentage >= 12 ? `${progressStats.completedPercentage}%` : ''}
+              </div>
+            )}
+            {progressStats.activePercentage > 0 && (
+              <div
+                className="h-full bg-gradient-to-r from-amber-500 to-[#7D3AC1] transition-all duration-500 flex items-center justify-center text-[9px] font-bold text-white overflow-hidden"
+                style={{ width: `${progressStats.activePercentage}%` }}
+                title={`Active: ${progressStats.active} (${progressStats.activePercentage}%)`}
+              >
+                {progressStats.activePercentage >= 12 ? `${progressStats.activePercentage}%` : ''}
+              </div>
+            )}
+            {progressStats.planningPercentage > 0 && (
+              <div
+                className="h-full bg-blue-500 rounded-r-full transition-all duration-500 flex items-center justify-center text-[9px] font-bold text-white overflow-hidden"
+                style={{ width: `${progressStats.planningPercentage}%` }}
+                title={`Planning: ${progressStats.planning} (${progressStats.planningPercentage}%)`}
+              >
+                {progressStats.planningPercentage >= 12 ? `${progressStats.planningPercentage}%` : ''}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Filter Chips */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        {['All', 'Crusade', 'Camp Meeting', 'Evangelism Campaign', 'Conference', 'Active', 'Planning'].map((t) => (
+        {['All', 'Crusade', 'Camp Meeting', 'Evangelism Campaign', 'Conference', 'Active', 'Completed', 'Planning'].map((t) => (
           <button
             key={t}
             onClick={() => setFilterType(t)}
@@ -208,77 +365,135 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
 
       {/* Operations Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {filteredOps.map((op) => (
-          <div
-            key={op.id}
-            className="p-5 rounded-2xl bg-white dark:bg-[#071430] border border-slate-200 dark:border-indigo-950 shadow-xs space-y-4 hover:border-[#D4AF37] transition-all flex flex-col justify-between"
-          >
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
-                  {op.type}
-                </span>
-                <span
-                  className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${
-                    op.status === 'Active'
-                      ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
-                      : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
-                  }`}
-                >
-                  {op.status}
-                </span>
-              </div>
+        {filteredOps.map((op) => {
+          const progress = getEventProgress(op.status);
 
-              <h3 className="font-serif-cinzel font-bold text-base text-slate-900 dark:text-white leading-tight">
-                {op.name}
-              </h3>
-
-              <div className="space-y-1.5 text-xs text-slate-600 dark:text-slate-300">
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-3.5 h-3.5 text-[#7D3AC1] dark:text-[#D4AF37]" />
-                  <span>
-                    {op.startDate} {op.endDate && op.endDate !== op.startDate ? `to ${op.endDate}` : ''} ({op.time})
+          return (
+            <div
+              key={op.id}
+              id={`operation-card-${op.id}`}
+              className="p-5 rounded-2xl bg-white dark:bg-[#071430] border border-slate-200 dark:border-indigo-950 shadow-xs space-y-4 hover:border-[#D4AF37] transition-all flex flex-col justify-between"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
+                    {op.type}
+                  </span>
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider border ${progress.badgeColor}`}
+                  >
+                    {op.status}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="truncate">{op.location}</span>
+
+                <h3 className="font-serif-cinzel font-bold text-base text-slate-900 dark:text-white leading-tight">
+                  {op.name}
+                </h3>
+
+                <div className="space-y-1.5 text-xs text-slate-600 dark:text-slate-300">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-3.5 h-3.5 text-[#7D3AC1] dark:text-[#D4AF37]" />
+                    <span>
+                      {op.startDate} {op.endDate && op.endDate !== op.startDate ? `to ${op.endDate}` : ''} ({op.time})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="truncate">{op.location}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <User className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Speaker: {op.speaker}</span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <User className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Speaker: {op.speaker}</span>
+
+                {op.notes && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                    {op.notes}
+                  </p>
+                )}
+
+                {/* Visual Progress Bar for Ministry Event Completion */}
+                <div className="pt-3 pb-1 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-1.5">
+                      {progress.icon}
+                      <span className="font-bold text-slate-700 dark:text-slate-300">
+                        Status:
+                      </span>
+                      <span className="font-mono font-bold text-slate-900 dark:text-white">
+                        {progress.percentage}%
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                      {progress.label}
+                    </span>
+                  </div>
+
+                  {/* Progress Bar Track */}
+                  <div
+                    className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-200/60 dark:border-slate-700/60"
+                    role="progressbar"
+                    aria-valuenow={progress.percentage}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 ease-out ${progress.barColor}`}
+                      style={{ width: `${progress.percentage}%` }}
+                    />
+                  </div>
+
+                  {/* Stage Descriptor & Quick Status Switcher */}
+                  <div className="flex items-center justify-between pt-0.5">
+                    <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate max-w-[140px]">
+                      {progress.stage}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {(['Planning', 'Active', 'Completed'] as const).map((statusOption) => (
+                        <button
+                          key={statusOption}
+                          type="button"
+                          onClick={() => handleStatusChange(op, statusOption)}
+                          id={`set-status-${op.id}-${statusOption.toLowerCase()}`}
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-semibold transition-colors cursor-pointer ${
+                            op.status === statusOption
+                              ? 'bg-[#0B1F4D] dark:bg-[#7D3AC1] text-white shadow-xs'
+                              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                          title={`Switch status to ${statusOption}`}
+                        >
+                          {statusOption}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {op.notes && (
-                <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 pt-1 border-t border-slate-100 dark:border-slate-800">
-                  {op.notes}
-                </p>
-              )}
-            </div>
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-3 text-slate-500">
+                  <span className="flex items-center gap-1">
+                    <Users className="w-3 h-3" />
+                    <strong>{op.expectedAttendance}</strong> souls
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <DollarSign className="w-3 h-3" />
+                    ${op.estimatedBudget.toLocaleString()}
+                  </span>
+                </div>
 
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
-              <div className="flex items-center gap-3 text-slate-500">
-                <span className="flex items-center gap-1">
-                  <Users className="w-3 h-3" />
-                  <strong>{op.expectedAttendance}</strong> souls
-                </span>
-                <span className="flex items-center gap-1">
-                  <DollarSign className="w-3 h-3" />
-                  ${op.estimatedBudget.toLocaleString()}
-                </span>
+                <button
+                  onClick={() => onDeleteOperation(op.id)}
+                  title="Delete Operation"
+                  className="p-1 text-slate-400 hover:text-rose-500 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
-
-              <button
-                onClick={() => onDeleteOperation(op.id)}
-                title="Delete Operation"
-                className="p-1 text-slate-400 hover:text-rose-500 transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Add Operation Modal */}

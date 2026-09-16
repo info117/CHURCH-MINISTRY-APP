@@ -601,6 +601,15 @@ export default function App() {
                   setMembers(prev => [m, ...prev]);
                   saveMemberToFirestore(m);
                 }}
+                onBulkUpdateMembers={(updatedMembersList) => {
+                  setMembers(prev => {
+                    const updateMap = new Map(updatedMembersList.map(m => [m.id, m]));
+                    return prev.map(m => updateMap.get(m.id) || m);
+                  });
+                  updatedMembersList.forEach(m => {
+                    saveMemberToFirestore(m);
+                  });
+                }}
                 currentUserRole={currentUserRole}
               />
             )}
