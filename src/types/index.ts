@@ -525,4 +525,57 @@ export interface ChurchSubscriptionState {
   isTrial?: boolean;
 }
 
+export type AttendeeClassification = 'Church Member' | 'Newcomer';
+
+export interface ChurchAttendanceRecord {
+  id: string;
+  attendeeType: AttendeeClassification;
+  memberId?: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  fellowship?: FellowshipGroup | string;
+  assemblySlotId: string;
+  assemblyTitle: string;
+  dayName: string;
+  date: string; // YYYY-MM-DD
+  timeLabel?: string;
+  attendanceMode: 'In-Person Sanctuary' | 'Online Live Stream';
+  recordedBy?: string;
+  notes?: string;
+  createdAt: string;
+  hasVisitationSchedule?: boolean;
+}
+
+export type VisitationType =
+  | 'Home Visitation'
+  | 'Phone Call & Pastoral Check'
+  | 'Pastoral Office Meeting'
+  | 'Welcome Tea & Fellowship'
+  | 'Care & Prayer Visit'
+  | 'Welcome Packet Delivery';
+
+export type VisitationStatus = 'Scheduled' | 'Completed' | 'Follow-up Needed' | 'Rescheduled';
+
+export interface NewcomerVisitationSchedule {
+  id: string;
+  newcomerName: string;
+  newcomerPhone: string;
+  newcomerEmail?: string;
+  address?: string;
+  fellowship?: string;
+  firstVisitDate: string; // Date of church assembly
+  assemblyTitle: string;
+  assemblySlotId: string;
+  visitationDate: string; // Follow-Up & Visitation date (YYYY-MM-DD)
+  visitationTime: string; // e.g. "18:00" or "06:30 PM"
+  visitationType: VisitationType;
+  assignedMinister: string; // e.g. Pastor David Chen
+  status: VisitationStatus;
+  prayerRequests?: string;
+  notes?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
 

@@ -640,8 +640,11 @@ export const CongregationView: React.FC<CongregationViewProps> = ({
         </div>
       </div>
 
-      {/* Weekly Attendance Heatmap (Visualizing Attendance Trends & Peak Assembly Times) */}
-      <AttendanceHeatmap />
+      {/* Weekly Attendance Heatmap (Visualizing Attendance Trends & Peak Assembly Times, Attendance Logging & Newcomer Follow-Up) */}
+      <AttendanceHeatmap
+        members={members}
+        onAddMemberToRoster={onAddMember}
+      />
 
       {/* Search & Department / Status Filter Bar */}
       <div className="bg-white dark:bg-[#071430] p-4 rounded-2xl border border-slate-200 dark:border-indigo-950 shadow-xs space-y-3">
